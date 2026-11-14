@@ -183,7 +183,7 @@ def harness_image(args, specs, name):
         tool = None
         try:
             if args.reuse_tools:
-                runtime=('relay.py','transport.py','blue.py','profiles.py','runtime.py','vm_guest.py','vm_package.py','vm_tunnel.py','hexstrike_cli.py','plandex_cli.py','strix_cli.py','shannon_cli.py','pentagi_cli.py')
+                runtime=('relay.py','transport.py','blue.py','profiles.py','runtime.py','vm_guest.py','vm_package.py','vm_tunnel.py','hexstrike_cli.py','plandex_cli.py','strix_cli.py','shannon_cli.py','pentagi_cli.py','terminal_ui.py')
                 subprocess.run(['buildah','copy',container,*[str(ROOT/file) for file in runtime],'/opt/solver/'],check=True)
             if args.split_tools:
                 mounted=Path(subprocess.check_output(['buildah','mount',container],text=True).strip())

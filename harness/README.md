@@ -55,7 +55,12 @@ VM:   vm_guest.py -> runtime.py run yougori -> profiles.headless() writes engine
 Security harnesses keep their own engines and their own terminal clients, which run in the
 screen's terminal pane. The Yougori screen frames them (harness, model, what the VM reaches, the
 palette), and the spec gives them the setup answers through their own options (`ADAPTERS.md`).
-Their VM reaches only the target and this inference.
+Their VM reaches only the target and this inference. In the pane, a `/` typed at the start of a
+line opens Yougori's commands as in the chat (/harness, /model, /new, /help); text that names none
+of them goes on to the client as typed, so the client's own commands still work. The screen kit of
+our own clients (`terminal_ui.py`) tells the pane when its input line is empty (OSC 7717), and ends
+its harness cleanly on the hangup with which /new and a model switch stop it; the next client
+starts once the last one has ended.
 
 - **`src/protocol.rs`** is the one event model: messages, reasoning, tool calls with diffs and
   terminal output, permission requests, questions, plans and to-dos, subagents (`parent`),

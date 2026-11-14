@@ -54,11 +54,12 @@ class Console:
     pause. `shifted`: which characters, counted in the order they are read, are Tabs typed with
     Shift, which getwch gives as plain Tabs (ShiftTab's stand-in tells them apart)."""
 
-    def __init__(self, *parts, shifted=()):
+    def __init__(self, *parts, shifted=(), backspaces=()):
         # getwch gives UTF-16 code units: a character beyond U+FFFF is two of them.
         units = (part.encode("utf-16-le", "surrogatepass") for part in parts)
         self.parts = [[chr(int.from_bytes(raw[i:i + 2], "little")) for i in range(0, len(raw), 2)] for raw in units]
         self.shifted = set(shifted)
+        self.backspaces = set(backspaces)  # which are the Backspace key itself (ShiftTab.backspace)
         self.read = 0
 
     def kbhit(self):
@@ -73,6 +74,22 @@ class Console:
 
     def shift_tab(self):
         return self.read in self.shifted
+
+    def backspace(self):
+        return self.read in self.backspaces
+
+
+class Peek:
+    """ShiftTab's stand-in: Shift+Tab and the Backspace key, as the console's records tell them."""
+
+    def __init__(self, console):
+        self.console = console
+
+    def __call__(self):
+        return self.console.shift_tab()
+
+    def backspace(self):
+        return self.console.backspace()
 
 
 class Keys(unittest.TestCase):
@@ -96,6 +113,15 @@ class Keys(unittest.TestCase):
         self.assertEqual(self.read(Console("\t\t", shifted={0, 1})), "\x1b[Z\x1b[Z")
         # Without the console's word, a Tab stays a Tab.
         self.assertEqual(vm_host.console_input(Console("\t"), threading.Event()), "\t")
+
+    def test_backspace_reaches_the_vm_as_an_xterm_sends_it(self):
+        """The console gives Backspace as 0x08 and Ctrl+Backspace as 0x7f, the other way round from
+        xterm, and a harness reading a plain line showed ^H where the person deleted. Ctrl+H, which
+        the console also gives as 0x08, stays 0x08."""
+        console = Console("ab\x08\x7f\x08", backspaces={2, 3})
+        self.assertEqual(vm_host.console_input(console, threading.Event(), Peek(console)), "ab\x7f\x08\x08")
+        # Without the console's word, the codes go on as they came.
+        self.assertEqual(vm_host.console_input(Console("\x08"), threading.Event()), "\x08")
 
     def test_requests_stay_within_the_vm_bound_and_never_split_a_key_or_a_character(self):
         # 4,000 F12 presses are 20,000 bytes: more than one request, each whole keys.
@@ -123,7 +149,8 @@ import vm_host
 SHIFT, CTRL, ALT, GREY = 0x10, 0x08, 0x02, 0x100
 presses = [(0x58, 0x2D, "x", 0), (0x21, 0x49, "\0", GREY), (0x74, 0x3F, "\0", 0), (0x26, 0x48, "\0", GREY | CTRL),
            (0x10, 0x2A, "\0", SHIFT), (0x09, 0x0F, "\t", SHIFT), (0x09, 0x0F, "\t", 0), (0x7B, 0x58, "\0", 0),
-           (0x24, 0x47, "\0", GREY | CTRL), (0x25, 0x4B, "\0", GREY | ALT), (0x70, 0x3B, "\0", SHIFT), (0x2D, 0x52, "\0", 0)]
+           (0x24, 0x47, "\0", GREY | CTRL), (0x25, 0x4B, "\0", GREY | ALT), (0x70, 0x3B, "\0", SHIFT), (0x2D, 0x52, "\0", 0),
+           (0x08, 0x0E, "\b", 0), (0x08, 0x0E, "\x7f", CTRL), (0x48, 0x23, "\b", CTRL)]
 class Key(ctypes.Structure):
     _fields_ = [("down", wintypes.BOOL), ("repeat", wintypes.WORD), ("key", wintypes.WORD), ("scan", wintypes.WORD),
                 ("char", wintypes.WCHAR), ("state", wintypes.DWORD)]
@@ -155,7 +182,8 @@ finally:
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         typed, size = json.loads(result.stdout)
         self.assertEqual(size, 20)  # INPUT_RECORD, as the console gives it
-        self.assertEqual(typed, "x\x1b[5~\x1b[15~\x1b[1;5A\x1b[Z\t\x1b[24~\x1b[1;5H\x1b[1;3D\x1b[1;2P\x1b[2~")
+        # Then Backspace, Ctrl+Backspace and Ctrl+H, as xterm sends them.
+        self.assertEqual(typed, "x\x1b[5~\x1b[15~\x1b[1;5A\x1b[Z\t\x1b[24~\x1b[1;5H\x1b[1;3D\x1b[1;2P\x1b[2~\x7f\x08\x08")
 
 
 ON = b"\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[>1u"
@@ -260,6 +288,41 @@ class Reset(Session, unittest.TestCase):
         terminal = Terminal()
         self.assertEqual(self.launch(guest, terminal), 137)
         self.assertEqual(terminal.buffer.getvalue(), ON + b"\x1b[<1u\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0m")
+
+
+class Writes(io.BytesIO):
+    """The terminal's byte stream, each write kept."""
+
+    def __init__(self):
+        super().__init__()
+        self.each = []
+
+    def write(self, data):
+        self.each.append(bytes(data))
+        return super().write(data)
+
+
+class Packets(Session, unittest.TestCase):
+    """A character cut between two packets is written whole: Python's Windows console writer waited
+    forever on the start of a character, and the session froze with it (14 Nov 2026)."""
+
+    def test_a_character_cut_between_packets_is_written_whole(self):
+        line = "─".encode()
+        guest = self.guest([{"output": base64.b64encode(b"box " + line[:2]).decode()},
+                            {"output": base64.b64encode(line[2:] + b" done").decode(), "exit": 0}])
+        terminal = Terminal()
+        terminal.buffer = Writes()
+        self.assertEqual(self.launch(guest, terminal), 0)
+        self.assertEqual(terminal.buffer.each, [b"box ", line + b" done"])
+
+    def test_the_launcher_and_the_vm_cut_packets_alike(self):
+        line, face = "─".encode(), "😀".encode()
+        for data in (b"ab" + line[:1], b"ab" + line[:2], b"ab" + line, line[:1], face[:3], face, b"\x80\x80\x80\x80",
+                     b"\xe2A", b"", b"plain"):
+            self.assertEqual(vm_host.whole_characters(data), vm_guest.whole(data), data)
+        self.assertEqual(vm_guest.whole(b"ab" + line[:2]), 2)
+        self.assertEqual(vm_guest.whole(face[:3]), 0)
+        self.assertEqual(vm_guest.whole(b"\x80\x80\x80\x80"), 4, "bytes that are no part of a character go as they are")
 
 
 class Guest(BaseHTTPRequestHandler):

@@ -39,6 +39,16 @@ pub struct Item {
 pub enum Confirmable {
     Quit,
     SwitchModel(String),
+    /// /new in a terminal pane: its client stops and starts fresh.
+    Renew,
+}
+
+/// One of Yougori's commands in a terminal pane: its name, what it does, what to type after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub name: String,
+    pub about: String,
+    pub takes: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +72,9 @@ pub enum Overlay {
     Picker { which: Which, title: String, choices: Vec<Choice>, selected: usize },
     Confirm { what: Confirmable, title: String, detail: String, yes: String },
     Keys { keys: Vec<(String, String)>, scroll: usize },
+    /// A `/` typed at the start of a terminal pane's line: Yougori's commands, while what is typed
+    /// still names one; `client` is the program the rest goes to.
+    Command { line: Editor, commands: Vec<Command>, selected: usize, client: String },
 }
 
 #[derive(Debug, PartialEq)]
@@ -73,6 +86,36 @@ pub enum Outcome {
     Confirmed(Confirmable),
     /// /harness chose a harness and its answers: the switch starts.
     Switch(Box<Pending>),
+    /// One of a terminal pane's commands (name, what was typed after it).
+    Command(String, String),
+    /// What was typed after `/` names none of Yougori's commands: it goes to the client as typed.
+    Pass(String),
+}
+
+/// Whether `text` still names one of `commands`: `/` and the start of a name, or a whole name
+/// that takes text, a space and that text.
+pub fn names_command(commands: &[Command], text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('/') else { return false };
+    match rest.split_once(char::is_whitespace) {
+        Some((name, _)) => commands.iter().any(|c| c.takes.is_some() && c.name.eq_ignore_ascii_case(name)),
+        None => {
+            let typed = rest.to_lowercase();
+            commands.iter().any(|c| c.name.to_lowercase().starts_with(&typed))
+        }
+    }
+}
+
+/// The commands `text` names: those whose name starts with what is typed, or the one named whole
+/// before the text it takes.
+fn named(commands: &[Command], text: &str) -> Vec<usize> {
+    let rest = text.strip_prefix('/').unwrap_or(text);
+    match rest.split_once(char::is_whitespace) {
+        Some((name, _)) => (0..commands.len()).filter(|&i| commands[i].name.eq_ignore_ascii_case(name)).collect(),
+        None => {
+            let typed = rest.to_lowercase();
+            (0..commands.len()).filter(|&i| commands[i].name.to_lowercase().starts_with(&typed)).collect()
+        }
+    }
 }
 
 impl Overlay {
@@ -86,7 +129,15 @@ impl Overlay {
         Overlay::Picker { which, title: title.to_owned(), choices, selected }
     }
 
-    /// Text pasted into the panel: the palette's filter, or the field /harness is typing.
+    /// The `/` just typed in a terminal pane, with Yougori's commands for `client`.
+    pub fn command(commands: Vec<Command>, client: &str) -> Overlay {
+        let mut line = Editor::default();
+        line.insert("/");
+        Overlay::Command { line, commands, selected: 0, client: client.to_owned() }
+    }
+
+    /// Text pasted into the panel: the palette's filter, the field /harness is typing, or a
+    /// command's text.
     pub fn paste(&mut self, text: &str) {
         match self {
             Overlay::Palette { filter, items, selected } => {
@@ -95,13 +146,93 @@ impl Overlay {
                 reselect(selected, items, filter.text());
             }
             Overlay::Switch(flow) => flow.paste(text),
+            Overlay::Command { line, selected, .. } => {
+                let pasted: String = text.chars().filter(|c| !c.is_control()).collect();
+                line.insert(&pasted);
+                *selected = 0;
+            }
             Overlay::Picker { .. } | Overlay::Confirm { .. } | Overlay::Keys { .. } => {}
+        }
+    }
+
+    /// A command panel whose text names none of its commands any more: that text, for the client.
+    pub fn passing(&self) -> Option<String> {
+        match self {
+            Overlay::Command { line, commands, .. } if !names_command(commands, line.text()) => {
+                Some(line.text().to_owned())
+            }
+            _ => None,
         }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Outcome {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match self {
+            Overlay::Command { line, commands, selected, .. } => {
+                let shown = named(commands, line.text());
+                match key.code {
+                    // Esc leaves what is typed to the client, as Esc in the chat leaves it in the box.
+                    KeyCode::Esc => return Outcome::Pass(line.text().to_owned()),
+                    KeyCode::Char('c' | 'u') if control => return Outcome::Close,
+                    KeyCode::Backspace if line.text() == "/" => return Outcome::Close,
+                    KeyCode::Char('h') if control && line.text() == "/" => return Outcome::Close,
+                    KeyCode::Backspace => line.backspace(),
+                    // Backspace as the Windows console gives it.
+                    KeyCode::Char('h') if control => line.backspace(),
+                    KeyCode::Up | KeyCode::BackTab => {
+                        if !shown.is_empty() {
+                            *selected = (*selected + shown.len() - 1) % shown.len();
+                        }
+                        return Outcome::Stay;
+                    }
+                    KeyCode::Down | KeyCode::Tab => {
+                        if !shown.is_empty() {
+                            *selected = (*selected + 1) % shown.len();
+                        }
+                        return Outcome::Stay;
+                    }
+                    KeyCode::Enter => {
+                        let text = line.text().trim().to_owned();
+                        let rest = text.strip_prefix('/').unwrap_or(&text);
+                        let (name, argument) = match rest.split_once(char::is_whitespace) {
+                            Some((name, argument)) => (name, argument.trim()),
+                            None => (rest, ""),
+                        };
+                        if let Some(command) = commands.iter().find(|c| c.name.eq_ignore_ascii_case(name)) {
+                            return Outcome::Command(command.name.clone(), argument.to_owned());
+                        }
+                        // A name typed in part: the chosen command, as Enter in the chat's list
+                        // chooses it (one that takes text waits for it).
+                        let Some(&chosen) = shown.get((*selected).min(shown.len().saturating_sub(1))) else {
+                            return Outcome::Pass(format!("{}\r", line.text()));
+                        };
+                        let command = &commands[chosen];
+                        if command.takes.is_some() {
+                            line.set(&format!("/{} ", command.name));
+                            *selected = 0;
+                            return Outcome::Stay;
+                        }
+                        return Outcome::Command(command.name.clone(), String::new());
+                    }
+                    KeyCode::Left => line.left(),
+                    KeyCode::Right => line.right(),
+                    KeyCode::Home => line.home(),
+                    KeyCode::End => line.end(),
+                    KeyCode::Delete => line.delete(),
+                    KeyCode::Char(c) if !control && !alt => line.insert(&c.to_string()),
+                    _ => return Outcome::Stay,
+                }
+                // The `/` itself deleted: no command, and nothing for the client.
+                if !line.text().starts_with('/') {
+                    return Outcome::Close;
+                }
+                if !names_command(commands, line.text()) {
+                    return Outcome::Pass(line.text().to_owned());
+                }
+                *selected = (*selected).min(named(commands, line.text()).len().saturating_sub(1));
+                Outcome::Stay
+            }
             Overlay::Switch(flow) => match flow.key(key) {
                 FlowOutcome::Stay => Outcome::Stay,
                 FlowOutcome::Close => Outcome::Close,
@@ -211,6 +342,33 @@ impl Overlay {
     /// (row, column) when the panel takes text.
     pub fn lines(&self, theme: &Theme, width: usize, rows: usize) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
         match self {
+            Overlay::Command { line, commands, selected, client } => {
+                let typed = line.text();
+                let mut body = vec![vec![span("› ", theme.accent()), span(typed.to_owned(), Style::default())]];
+                let cursor_column = 3 + 2 + text::width(&typed[..line.cursor()]);
+                let shown = named(commands, typed);
+                let chosen = (*selected).min(shown.len().saturating_sub(1));
+                let name_width = shown.iter().map(|&i| text::width(&commands[i].name)).max().unwrap_or(0) + 1;
+                let window = window(shown.len(), chosen, rows.saturating_sub(3));
+                for (at, &i) in shown.iter().enumerate().take(window.1).skip(window.0) {
+                    let command = &commands[i];
+                    let current = at == chosen;
+                    let mut about = command.about.clone();
+                    if let Some(takes) = &command.takes {
+                        about = format!("{about} · then type {takes}");
+                    }
+                    body.push(vec![
+                        span(if current { "● " } else { "○ " }, if current { theme.good() } else { theme.muted() }),
+                        span(
+                            format!("/{:<name_width$}", command.name),
+                            if current { theme.accent().add_modifier(ratatui::style::Modifier::BOLD) } else { theme.accent() },
+                        ),
+                        span(format!(" {about}"), theme.muted()),
+                    ]);
+                }
+                let hint = format!("enter run · ↑↓ choose · esc gives the text to {client}");
+                (panel(theme, "Yougori's commands", body, &hint, width), Some((1, cursor_column)))
+            }
             Overlay::Switch(flow) => flow.lines(theme, width, rows),
             Overlay::Palette { filter, items, selected } => {
                 let visible = matching(items, filter.text());
@@ -431,6 +589,28 @@ mod tests {
         picker.key(key(KeyCode::Down));
         assert_eq!(picker.key(key(KeyCode::Enter)), Outcome::Pick(Which::Models, "b".into()));
         assert_eq!(picker.key(key(KeyCode::Char('1'))), Outcome::Pick(Which::Models, "a".into()));
+    }
+
+    #[test]
+    fn a_command_line_keeps_only_what_names_a_command() {
+        let commands = vec![
+            Command { name: "model".into(), about: "switch model".into(), takes: Some("id".into()) },
+            Command { name: "new".into(), about: "start again".into(), takes: None },
+        ];
+        assert!(names_command(&commands, "/"));
+        assert!(names_command(&commands, "/mo"));
+        assert!(names_command(&commands, "/MODEL gemma"));
+        assert!(!names_command(&commands, "/new thing"), "new takes nothing after it");
+        assert!(!names_command(&commands, "/news"));
+        assert!(!names_command(&commands, "//"));
+        assert!(!names_command(&commands, "model"));
+        let mut line = Overlay::command(commands.clone(), "Shannon");
+        assert_eq!(line.key(key(KeyCode::Char('n'))), Outcome::Stay);
+        assert_eq!(line.key(key(KeyCode::Enter)), Outcome::Command("new".into(), String::new()));
+        let mut line = Overlay::command(commands.clone(), "Shannon");
+        assert_eq!(line.key(key(KeyCode::Char('s'))), Outcome::Pass("/s".into()));
+        let mut line = Overlay::command(commands, "Shannon");
+        assert_eq!(line.key(key(KeyCode::Backspace)), Outcome::Close);
     }
 
     #[test]

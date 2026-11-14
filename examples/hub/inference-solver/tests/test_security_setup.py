@@ -289,9 +289,10 @@ class Launchers(unittest.TestCase):
 
     def test_pentestgpt_shows_the_brief_on_one_line_to_paste_at_its_first_question(self):
         spec = self.spec("pentestgpt", ANSWERS)
-        self.assertEqual(spec["argv"][:4], ["/bin/sh", "-c", profiles.SHOW_FIRST, "pentestgpt"])
-        self.assertEqual(spec["argv"][4].splitlines(), ["PentestGPT asks for the task first. Paste this line as its answer:",
+        self.assertEqual(spec["argv"][:3], ["python3", "/opt/solver/terminal_ui.py", "brief"])
+        self.assertEqual(spec["argv"][3].splitlines(), ["PentestGPT asks for the task first. Paste this line as its answer:",
                                                         profiles.setup_brief(ANSWERS, one_line=True)])
+        self.assertEqual(spec["argv"][4], "--")
         self.assertEqual(spec["argv"][5:], self.own("pentestgpt"))
 
     def test_without_a_target_each_starts_as_its_terminal_client(self):
@@ -575,6 +576,18 @@ class LauncherOptions(unittest.TestCase):
         os.chdir(self.was)
         self.clean.stop()
 
+    def test_pentagi_started_again_in_its_vm_gets_a_fresh_database(self):
+        # Started again, with another model or /new: the run before left its database (and maybe
+        # its server); initdb wants no folder in its way.
+        pg, database, ran = Path("/usr/lib/postgresql/17/bin"), self.root / "database", []
+        (database / "base").mkdir(parents=True)
+        pentagi_cli.fresh_database(pg, database, None, run=lambda argv, **_: ran.append(argv))
+        self.assertFalse(database.exists())
+        self.assertEqual(ran, [[str(pg / "pg_ctl"), "-D", str(database), "-m", "immediate", "-w", "stop"]])
+        ran.clear()
+        pentagi_cli.fresh_database(pg, database, None, run=lambda argv, **_: ran.append(argv))
+        self.assertEqual(ran, [], "nothing to stop on a first run")
+
     def test_pentagi_and_hexstrike_take_a_task_or_one_print_prompt(self):
         for launcher in (pentagi_cli, hexstrike_cli):
             with self.subTest(launcher=launcher.__name__):
@@ -625,7 +638,7 @@ class LauncherOptions(unittest.TestCase):
         self.assertEqual(sent[0][1], {"role": "user", "content": task})
         self.assertEqual(tools, [("server_health", {})])
         self.assertEqual(asked, 1, "after the task the person goes on in the terminal")
-        self.assertIn("hexstrike > " + task.splitlines()[0], shown)
+        self.assertIn("› " + task.splitlines()[0], shown, "the task shows as the person's turn, as the screen shows one")
         self.assertIn(task, text)
         self.assertIn("Done; signed in with [hidden]", text)
         self.assertNotIn(PASSWORD, text)
@@ -678,6 +691,28 @@ class LauncherOptions(unittest.TestCase):
                 self.assertNotIn("unavailable", text)
                 self.assertNotIn("10.0.0.5", text)
         self.assertEqual(hexstrike_cli.system_message({}), said(""))
+
+    def test_a_hexstrike_tool_shows_its_call_and_its_result_as_lines_to_read(self):
+        """Under each tool's row: the output HexStrike's server gave, and JSON as key: value lines,
+        not its braces; a failed tool shows why. The row names the tool and its first arguments."""
+        def result(value, error=False):
+            return json.dumps({"content": [{"type": "text", "text": value if isinstance(value, str) else json.dumps(value)}],
+                               "isError": error})
+        spider = {"success": True, "result": {"discovered_urls": ["http://127.0.0.1:8000/login", "http://127.0.0.1:8000"],
+                                              "forms": [{"action": "/login"}], "status": 200, "headers": {"Server": "Werkzeug/2.0.1"}}}
+        self.assertEqual(hexstrike_cli.result_view(result(spider)), (False, "\n".join([
+            "discovered_urls: http://127.0.0.1:8000/login, http://127.0.0.1:8000", "forms: 1 item", "status: 200",
+            "headers.Server: Werkzeug/2.0.1"])))
+        # Its own success says nothing the row does not; a count reads as words.
+        self.assertEqual(hexstrike_cli.result_view(result({"success": True, "pages": [{}, {}], "total": 2})),
+                         (False, "pages: 2 items\ntotal: 2"))
+        self.assertEqual(hexstrike_cli.result_view(result({"success": True, "stdout": "HTTP/1.1 200 OK"})), (False, "HTTP/1.1 200 OK"))
+        self.assertEqual(hexstrike_cli.result_view(result({"success": False, "error": "nmap: not found"})), (True, "nmap: not found"))
+        self.assertEqual(hexstrike_cli.result_view(result("plain words", error=True)), (True, "plain words"))
+        self.assertEqual(hexstrike_cli.result_view("not json"), (False, "not json"))
+        self.assertEqual(hexstrike_cli.call_title("http_repeater", {"url": "http://x", "data": "a" * 60, "empty": "", "n": 3, "more": 1}),
+                         "http_repeater  url=http://x  data=" + "a" * 47 + "…  n=3")
+        self.assertEqual(hexstrike_cli.call_title("server_health", {}), "server_health")
 
     def test_hexstrike_offers_its_own_web_tools_within_the_strictest_model_server_limits(self):
         """HexStrike lists 150 tools (130 KiB), which every Yougori model server refused, and the site
@@ -964,7 +999,9 @@ class PentagiFlow(unittest.TestCase):
         self.assertEqual(outcome, 0)
         self.assertEqual(len(asked), 1)
         self.assertIn(WRITE_UP, asked[0], "the task's report came before the question")
-        self.assertIn('Result of "Scan the practice app\'s ports":\n\n8000/tcp open', asked[0])
+        # The command's row waited for its result, which then came under a row of its own.
+        self.assertRegex(asked[0], r"○ Run +Scan the practice app's ports +waiting")
+        self.assertRegex(asked[0], r"◇ Result +Scan the practice app's ports +done\n +8000/tcp open")
         order = [saved.index(text) for text in ("## Task", "Scan the practice app's ports", "8000/tcp open", "Scan the ports",
                                                 WRITE_UP, "## End", "The flow was stopped from this terminal.")]
         self.assertEqual(order, sorted(order))

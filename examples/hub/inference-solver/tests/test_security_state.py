@@ -204,7 +204,7 @@ class ShannonDeliverables(unittest.TestCase):
         worker runs, and is gone once it has stopped, however it stopped."""
         seen = []
 
-        def worker(command, environment, source, log_path, verbose=False):
+        def worker(command, environment, source, log_path, verbose=False, said=None):
             seen.append((shannon_cli.points_to(self.deliverables / ".git", self.home / shannon_cli.DELIVERABLES_GIT),
                          environment["GIT_CEILING_DIRECTORIES"]))
             if len(seen) == 2:
@@ -329,7 +329,7 @@ class ShannonBrowserConfig(unittest.TestCase):
         home = folder(self)
         seen = []
 
-        def worker(command, environment, source, log_path, verbose=False):
+        def worker(command, environment, source, log_path, verbose=False, said=None):
             shannon_browser_config(Path.cwd())
             seen.append(files(Path.cwd()))
             if len(seen) == 2:

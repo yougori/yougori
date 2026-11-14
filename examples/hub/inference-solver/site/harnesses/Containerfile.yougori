@@ -65,7 +65,7 @@ FROM ${VARIANT} AS runtime
 ARG VARIANT
 WORKDIR /opt/solver
 COPY relay.py transport.py blue.py profiles.py runtime.py vm_guest.py vm_package.py vm_tunnel.py practice_app.py \
-     hexstrike_cli.py plandex_cli.py strix_cli.py shannon_cli.py pentagi_cli.py ./
+     hexstrike_cli.py plandex_cli.py strix_cli.py shannon_cli.py pentagi_cli.py terminal_ui.py ./
 COPY bridges/*.py ./bridges/
 COPY --from=harness yougori-harness /usr/local/bin/yougori-harness
 # The runtime files stay root's and read-only; the VM's user writes only the pack into

@@ -23,6 +23,7 @@ build/linux/
 build/macos-runtime/
 runtime/cuda/host/target/
 cli/target/
+harness/target/
 vault/target/
 vendor/glib/target/
 src-tauri/resources/vault/

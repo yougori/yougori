@@ -796,13 +796,14 @@ def _hexstrike(spec, answers, root):
 
 # PentestGPT's legacy client takes its task only as the answer to its first question (a one-line
 # prompt on its terminal) and has no option for it, so the brief is shown first, on one line, for
-# the person to paste there.
-SHOW_FIRST = 'printf "%s\\n\\n" "$1"; shift; exec "$@"'
+# the person to paste there, in the Yougori screen's look (terminal_ui.py brief), which then starts
+# the client in its place.
+SHOW_FIRST = ["python3", "/opt/solver/terminal_ui.py", "brief"]
 
 
 def _pentestgpt(spec, answers, root):
     shown = "PentestGPT asks for the task first. Paste this line as its answer:\n" + setup_brief(answers, one_line=True)
-    spec["argv"] = ["/bin/sh", "-c", SHOW_FIRST, "pentestgpt", shown, *spec["argv"]]
+    spec["argv"] = [*SHOW_FIRST, shown, "--", *spec["argv"]]
 
 
 # Our ACP bridges (bridges/NAME_acp.py) drive the real engines of the harnesses that speak no

@@ -921,6 +921,8 @@ impl App {
                 self.switch_by_restart(model, now);
             }
             Outcome::Switch(pending) => self.start_switch(*pending, now),
+            // A terminal pane's own (its command line, /new): the chat never opens them.
+            Outcome::Command(..) | Outcome::Pass(_) | Outcome::Confirmed(Confirmable::Renew) => self.overlay = None,
         }
     }
 

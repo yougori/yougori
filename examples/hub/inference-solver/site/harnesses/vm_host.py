@@ -532,6 +532,21 @@ CONNECT_SECONDS = 10
 UNREACHED_SECONDS = 120
 
 
+def whole_characters(data):
+    """How many of `data`'s first bytes end on a whole UTF-8 character: the bytes of one whose last
+    bytes are in the next packet wait for them. Python's Windows console writer waits forever on the
+    start of a character it has no end for, and the session froze with it (vm_guest.py whole() keeps
+    a VM's packets whole too). Bytes that are no part of a character go as they are."""
+    end = start = len(data)
+    while start > 0 and end - start < 3 and data[start - 1] & 0xC0 == 0x80:
+        start -= 1
+    if start == 0:
+        return end
+    lead = data[start - 1]
+    size = 2 if lead & 0xE0 == 0xC0 else 3 if lead & 0xF0 == 0xE0 else 4 if lead & 0xF8 == 0xF0 else 1
+    return end if end - (start - 1) >= size else start - 1
+
+
 def again(post, path, data, done=None, seconds=UNREACHED_SECONDS):
     """`post(path, data)`, asked again while its connection does not open, for up to `seconds` in
     all (and not once the session is `done`)."""
@@ -740,17 +755,30 @@ class ShiftTab:
         self.records = (Record * 64)()
         self.count = wintypes.DWORD()
 
-    def __call__(self):
+    VK_BACK = 0x08
+
+    def next_key(self):
+        """The key press msvcrt gives next, as the console's record holds it (None: none waiting)."""
         if self.handle is None or not self.kernel32.PeekConsoleInputW(self.handle, self.records, len(self.records),
                                                                       self.ctypes.byref(self.count)):
-            return False
+            return None
         for record in self.records[:self.count.value]:
             key = record.event.key
             if record.type != self.KEY_EVENT or not key.down or (key.char == "\0" and key.key in self.MODIFIERS):
                 continue
-            return (key.char == "\t" and key.key == self.VK_TAB and bool(key.state & self.SHIFT)
-                    and not key.state & self.CONTROL_OR_ALT)
-        return False
+            return key
+        return None
+
+    def __call__(self):
+        key = self.next_key()
+        return (key is not None and key.char == "\t" and key.key == self.VK_TAB and bool(key.state & self.SHIFT)
+                and not key.state & self.CONTROL_OR_ALT)
+
+    def backspace(self):
+        """Whether the key msvcrt gives next is the Backspace key itself (with Ctrl or not), not
+        Ctrl+H, which it gives alike."""
+        key = self.next_key()
+        return key is not None and key.key == self.VK_BACK
 
     def close(self):
         if self.handle is not None:
@@ -763,7 +791,10 @@ def console_input(msvcrt, done, shift_tab=lambda: False):
     A terminal answers a harness's questions (its colours, modes, cursor position) with escape
     sequences: sent a character at a time, an answer reaches the harness too slowly to be read as
     one, and the harness shows it as typed text. `shift_tab` says whether the key msvcrt gives next
-    is Shift+Tab, which it gives as a Tab (ShiftTab)."""
+    is Shift+Tab, which it gives as a Tab (ShiftTab), and its backspace() whether it is the
+    Backspace key: the console gives Backspace as 0x08 and Ctrl+Backspace as 0x7f, the other way
+    round from xterm, so a harness showed ^H where the person deleted. Ctrl+H stays 0x08."""
+    backspace = getattr(shift_tab, "backspace", lambda: False)
     typed, size = [], 0
     # Room for one more key and, after a character's first half, its second: within the VM's
     # bound a request, and never half a character left for the next.
@@ -772,12 +803,14 @@ def console_input(msvcrt, done, shift_tab=lambda: False):
             # The rest of an answer may still be arriving.
             if not typed or "\x1b" not in "".join(typed[-64:]) or done.wait(.005) or not msvcrt.kbhit():
                 break
-        shifted = shift_tab()
+        shifted, erase = shift_tab(), backspace()
         char = msvcrt.getwch()
         if char in ("\x00", "\xe0"):
             char = WINDOWS_KEYS.get(msvcrt.getwch(), "")
         elif char == "\t" and shifted:
             char = "\x1b[Z"
+        elif erase and char in ("\x08", "\x7f"):
+            char = "\x7f" if char == "\x08" else "\x08"
         if char == "\x1d":
             return None
         typed.append(char)
@@ -1491,9 +1524,13 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                 keys.take()
             threading.Thread(target=terminal_input, args=(control, done, keys), daemon=True).start()
         relaunch = None
+        # The first bytes of a character whose others are still to come: written with them.
+        partial = b""
         while not done.is_set():
             packet = again(control.post, "/poll", {}, done)
-            output = base64.b64decode(packet.get("output", ""), validate=True)
+            output = partial + base64.b64decode(packet.get("output", ""), validate=True)
+            cut = whole_characters(output)
+            output, partial = output[:cut], output[cut:]
             if output:
                 screen.feed(output)
                 sys.stdout.buffer.write(output)

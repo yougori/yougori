@@ -2,13 +2,15 @@
 //! the header line (Yougori, the harness, the model), the client's screen, and the status line
 //! (what the VM reaches, the keys). The client runs in a pseudo-terminal sized to the pane; its
 //! output is parsed into a screen (vt100) and drawn with its colours; every key and paste goes to
-//! it except Ctrl+P, which opens the palette (switch harness or model, send Ctrl+P, keys, quit).
+//! it except Ctrl+P, which opens the palette (switch harness or model, send Ctrl+P, keys, quit),
+//! and a `/` at the start of a line, which opens Yougori's commands (/harness, /model, /new,
+//! /help) as in the chat; what names none of them goes on to the client as typed.
 use super::draw::{Frame, ScrollRegion};
 use super::mask::Masker;
-use super::overlay::{Action, Choice, Confirmable, Item, Outcome, Overlay, Which};
+use super::overlay::{Action, Choice, Command, Confirmable, Item, Outcome, Overlay, Which};
 use super::switcher::{Flow, FlowOutcome, Mode as Where, Pending};
 use super::text::{self, pad, span, truncate_spans, wrap_text};
-use super::theme::{self, clock, Depth, Theme, BLUE, SKY};
+use super::theme::{self, clock, Depth, Rgb, Theme, BLUE, GRAY, GREEN, SKY};
 use crate::spec::EngineSpec;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use portable_pty::{CommandBuilder, PtySize};
@@ -25,6 +27,19 @@ use tokio::sync::mpsc::UnboundedSender;
 /// Rows of the client's output kept for scrolling back.
 const SCROLLBACK: usize = 5000;
 
+/// Each security harness's own pair of colours, from the first to its signature, as its terminal
+/// draws with them (terminal_ui.py BRANDS): its name in the header.
+pub fn brand(harness: &str) -> Option<(Rgb, Rgb)> {
+    match harness {
+        "hexstrike" => Some((Rgb(0xff, 0x6b, 0x6b), Rgb(0xff, 0xa9, 0x4d))),
+        "pentagi" => Some((Rgb(0xf7, 0x83, 0xac), Rgb(0xb1, 0x97, 0xfc))),
+        "shannon" => Some((Rgb(0x74, 0xc0, 0xfc), Rgb(0x38, 0xd9, 0xa9))),
+        "strix" => Some((Rgb(0xff, 0x92, 0x2b), Rgb(0xff, 0xd4, 0x3b))),
+        "pentestgpt" => Some((Rgb(0x69, 0xdb, 0x7c), Rgb(0x3b, 0xc9, 0xdb))),
+        _ => None,
+    }
+}
+
 /// What the client's threads report, tagged with the child they belong to.
 pub enum Message {
     Output(u64, Vec<u8>),
@@ -32,10 +47,15 @@ pub enum Message {
 }
 
 /// Answers the client's questions to its terminal (cursor position, device attributes, size,
-/// colours), which the pane's screen cannot answer itself.
+/// colours), which the pane's screen cannot answer itself, and keeps what the screen kit of
+/// Yougori's harness clients says of its input line.
 #[derive(Default)]
 pub struct Replies {
     pub out: Vec<u8>,
+    /// The client's latest word on the line the person types (OSC 7717 `line;empty` or
+    /// `line;text`): Some(true) when it is empty. Only a hint for where `/` starts a command:
+    /// whatever the client prints, a command runs only when the person types it.
+    pub line: Option<bool>,
 }
 
 impl vt100::Callbacks for Replies {
@@ -76,6 +96,8 @@ impl vt100::Callbacks for Replies {
         match params {
             [b"10", b"?"] => self.out.extend_from_slice(b"\x1b]10;rgb:e4e4/e4e4/e7e7\x1b\\"),
             [b"11", b"?"] => self.out.extend_from_slice(b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+            [b"7717", b"line", b"empty"] => self.line = Some(true),
+            [b"7717", b"line", b"text"] => self.line = Some(false),
             _ => {}
         }
     }
@@ -102,6 +124,25 @@ impl Child {
         let _ = self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
     }
 
+    /// The erase character of the client's terminal while it reads whole lines (canonical mode,
+    /// as a plain `input()` or a shell without line editing reads): None while it reads keys
+    /// itself, or where the mode cannot be read.
+    pub fn line_erase(&self) -> Option<u8> {
+        #[cfg(unix)]
+        {
+            let fd = self.master.as_raw_fd()?;
+            // SAFETY: tcgetattr writes the termios of the pty's slave side (Linux answers for the
+            // slave on its master) into a zeroed struct it owns for the call.
+            let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 || termios.c_lflag & libc::ICANON == 0 {
+                return None;
+            }
+            Some(termios.c_cc[libc::VERASE])
+        }
+        #[cfg(not(unix))]
+        None
+    }
+
     pub fn kill(&mut self) {
         let _ = self.killer.kill();
     }
@@ -117,10 +158,12 @@ impl Drop for Child {
 /// needs to know about what it draws on. The pane understands xterm's sequences and adapts any
 /// colour to the person's terminal; when that terminal shows no colour (NO_COLOR) the client is
 /// told so, and not that it has 24-bit colour, so it marks what is selected with other cues
-/// instead of colours the pane would drop.
+/// instead of colours the pane would drop. YOUGORI_PANE tells Yougori's own screen kit that it
+/// draws in this pane, so it says when its input line is empty (OSC 7717).
 pub fn client_env(spec: &EngineSpec, depth: Depth) -> BTreeMap<String, String> {
     let mut environment = spec.environment();
     environment.entry("TERM".into()).or_insert_with(|| "xterm-256color".into());
+    environment.insert("YOUGORI_PANE".into(), "1".into());
     if depth == Depth::None {
         environment.remove("COLORTERM");
         environment.insert("NO_COLOR".into(), "1".into());
@@ -258,6 +301,26 @@ pub fn key_bytes(key: KeyEvent, application_cursor: bool) -> Vec<u8> {
     bytes
 }
 
+/// What a key sends to a client whose terminal reads whole lines (`erase`: its erase character).
+/// The line discipline edits that line, and knows only its erase character, so Backspace and
+/// Ctrl+H both send it (the Windows console gives Backspace as Ctrl+H, and its launcher passes keys
+/// on as the console gives them). Keys sent as escape sequences (the arrows, Delete, Home, End, the
+/// function keys, Alt with a key) would only be echoed into the line as codes such as ^[[3~, so
+/// they send nothing; Shift+Enter sends the line.
+pub fn line_bytes(key: KeyEvent, bytes: Vec<u8>, erase: u8) -> Vec<u8> {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Backspace => return if erase == 0 { bytes } else { vec![erase] },
+        KeyCode::Char('h' | 'H') if control && erase != 0 => return vec![erase],
+        KeyCode::Enter => return vec![b'\r'],
+        _ => {}
+    }
+    if bytes.first() == Some(&0x1b) {
+        return Vec::new();
+    }
+    bytes
+}
+
 /// A paste as the client takes it: wrapped in bracketed-paste marks when it asked for them.
 pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     let text = text.replace("\r\n", "\r").replace('\n', "\r");
@@ -284,6 +347,8 @@ pub enum PanePhase {
 pub enum PaneEffect {
     Start,
     Restart(String),
+    /// /new: the client stops, and once it has ended (or after RENEW_WAIT) starts fresh.
+    Renew,
     /// Switch harness (/harness): in place the client stops first, then the switch command runs.
     Switch(Box<Pending>),
     /// Esc while switching harness: the switch command is asked to stop.
@@ -318,7 +383,23 @@ pub struct Pane {
     pub change_from: Option<PanePhase>,
     /// What the screen before this one handed on (its conversation), for the screen after it.
     pub kept: super::Carry,
+    /// How many characters the line the person types to the client holds, as far as the pane
+    /// knows (from the keys it sent, and the screen kit's word): None after keys that move in the
+    /// line. A `/` opens Yougori's commands unless the line is known to hold something.
+    pub typed: Option<usize>,
 }
+
+/// Yougori's commands in a terminal pane (name, what it does, what to type after it): the chat's
+/// own, and /new. While the client runs, /exit and /quit are its own (each harness's /exit ends
+/// it its way); once it has ended they quit, as `q` does.
+const PANE_COMMANDS: [(&str, &str, Option<&str>); 6] = [
+    ("harness", "switch to another harness", Some("name")),
+    ("model", "switch model", Some("id")),
+    ("new", "start {name} again, fresh", None),
+    ("help", "commands and keys", None),
+    ("exit", "quit Yougori", None),
+    ("quit", "quit Yougori", None),
+];
 
 fn parser(rows: u16, cols: u16) -> vt100::Parser<Replies> {
     let rows = NonZeroU16::new(rows.max(1)).unwrap_or(NonZeroU16::MIN);
@@ -355,6 +436,7 @@ impl Pane {
             change: None,
             change_from: None,
             kept: super::Carry::default(),
+            typed: Some(0),
         }
     }
 
@@ -397,6 +479,24 @@ impl Pane {
         self.switch_from = None;
         self.scrollback = 0;
         self.failed = false;
+        self.typed = Some(0);
+        self.dirty = true;
+    }
+
+    /// /new began: the client is asked to stop, and the pane shows the next one starting on a
+    /// fresh screen.
+    pub fn renewing(&mut self, now: Instant) {
+        let (rows, cols) = self.parser.screen().size();
+        self.parser = parser(rows.get(), cols.get());
+        self.phase = PanePhase::Starting { since: now };
+        self.scrollback = 0;
+        self.typed = Some(0);
+        self.dirty = true;
+    }
+
+    /// /new while the client starts or switches: not taken.
+    pub fn wait_to_renew(&mut self, now: Instant) {
+        self.note = Some((format!("Wait until {} has started to start it again.", self.spec.name), now));
         self.dirty = true;
     }
 
@@ -441,15 +541,17 @@ impl Pane {
         self.dirty = true;
     }
 
-    /// Opens the /harness panel (Ctrl+P, Switch harness). Not while the client starts or switches.
-    pub fn open_harness(&mut self, now: Instant) {
+    /// Opens the /harness panel (Ctrl+P, Switch harness, or /harness), or goes straight to
+    /// `named` (/harness NAME: its questions, or the switch when it asks none). Not while the
+    /// client starts or switches.
+    pub fn open_harness(&mut self, named: Option<&str>, now: Instant) {
         self.overlay = None;
         if !self.switchable() {
             self.note = Some((format!("Wait until {} has started to switch harness.", self.spec.name), now));
             self.dirty = true;
             return;
         }
-        match Flow::open(&self.spec, &self.spec.model, None) {
+        match Flow::open(&self.spec, &self.spec.model, named.filter(|named| !named.trim().is_empty())) {
             Ok((_, FlowOutcome::Start(pending))) => self.start_switch(*pending, now),
             Ok((flow, _)) => self.overlay = Some(Overlay::Switch(Box::new(flow))),
             Err(error) => self.note = Some((error, now)),
@@ -533,6 +635,9 @@ impl Pane {
                 if let Some(child) = &self.child {
                     child.send(replies);
                 }
+                if let Some(empty) = self.parser.callbacks_mut().line.take() {
+                    self.typed = if empty { Some(0) } else { Some(self.typed.filter(|n| *n > 0).unwrap_or(1)) };
+                }
                 self.dirty = true;
             }
             Message::Exited(generation, status) if generation == self.generation => {
@@ -612,12 +717,105 @@ impl Pane {
     fn keys_help(&self) -> Vec<(String, String)> {
         let name = &self.spec.name;
         vec![
-            ("ctrl+p".into(), "Yougori's commands: harness, model, keys, quit".into()),
+            ("/".into(), format!("at the start of a line: Yougori's commands; others go to {name}")),
+            ("/harness".into(), "switch to another harness (/harness NAME)".into()),
+            ("/model".into(), "switch model (/model ID)".into()),
+            ("/new".into(), format!("start {name} again, fresh")),
+            ("/help".into(), "these keys and commands".into()),
+            ("ctrl+p".into(), "Yougori's menu: harness, model, keys, quit".into()),
             ("shift+pgup".into(), format!("scroll back through {name}'s output")),
             ("shift+pgdn".into(), "scroll forward again".into()),
             ("other keys".into(), format!("go to {name}")),
             ("q".into(), format!("quit, once {name} has ended")),
         ]
+    }
+
+    /// Yougori's commands offered now: /exit and /quit only once no client runs.
+    fn commands(&self) -> Vec<Command> {
+        let running = self.child.is_some();
+        PANE_COMMANDS
+            .iter()
+            .filter(|(name, ..)| !(running && matches!(*name, "exit" | "quit")))
+            .map(|(name, about, takes)| Command {
+                name: (*name).to_owned(),
+                about: about.replace("{name}", &self.spec.name),
+                takes: takes.map(str::to_owned),
+            })
+            .collect()
+    }
+
+    /// Whether a `/` typed now opens Yougori's commands: the line the person types to the client
+    /// is not known to hold anything (or no client takes keys).
+    fn command_starts(&self) -> bool {
+        match self.phase {
+            PanePhase::Ended { .. } | PanePhase::Starting { .. } => true,
+            PanePhase::Running { .. } | PanePhase::Switching { .. } => self.typed.is_none_or(|n| n == 0),
+            PanePhase::Changing { .. } | PanePhase::Quitting { .. } => false,
+        }
+    }
+
+    /// Runs one of Yougori's commands typed in the pane.
+    fn run_command(&mut self, name: &str, argument: &str, now: Instant) {
+        match name {
+            "harness" => self.open_harness(Some(argument), now),
+            "model" if argument.is_empty() => self.outcome(Outcome::Run(Action::Model), now),
+            "model" => match self.models.iter().find(|model| model.eq_ignore_ascii_case(argument)).cloned() {
+                Some(model) => self.outcome(Outcome::Pick(Which::Models, model), now),
+                None => self.note = Some((format!("There is no model {argument} here. /model lists them."), now)),
+            },
+            "new" => self.renew(now),
+            "help" => self.overlay = Some(Overlay::Keys { keys: self.keys_help(), scroll: 0 }),
+            "exit" | "quit" => self.request_quit(),
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
+    /// /new: a running client is asked first (what it shows goes); one that has ended starts
+    /// again at once; not while it starts or switches.
+    fn renew(&mut self, now: Instant) {
+        match self.phase {
+            PanePhase::Running { .. } if self.child.is_some() => {
+                let name = &self.spec.name;
+                self.overlay = Some(Overlay::Confirm {
+                    what: Confirmable::Renew,
+                    title: format!("Start {name} again?"),
+                    detail: format!("{name} stops and starts fresh; what it shows now goes."),
+                    yes: "start again".into(),
+                });
+            }
+            PanePhase::Ended { .. } => self.effects.push(PaneEffect::Start),
+            _ => self.wait_to_renew(now),
+        }
+    }
+
+    /// Text typed after a `/` that names none of Yougori's commands: it goes to the client as
+    /// the keys would have.
+    fn pass(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(child) = &self.child {
+            child.send(text.as_bytes().to_vec());
+            self.typed = Some(self.typed.unwrap_or(0) + text.chars().count());
+        }
+    }
+
+    /// A security harness's target for the header, without its scheme: the target it was given
+    /// (the practice app said as such) or the targets the VM reaches. None for other harnesses.
+    fn target_words(&self) -> Option<String> {
+        if self.spec.category != "security" {
+            return None;
+        }
+        let answers = &self.spec.answers;
+        let target = super::draw::answer_text(&answers["target"])
+            .or_else(|| (!self.spec.reach.targets.is_empty()).then(|| self.spec.reach.targets.join(", ")))?;
+        let target = target
+            .split(", ")
+            .map(|t| t.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/'))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(if answers["practice"] == serde_json::Value::Bool(true) { format!("{target} (practice app)") } else { target })
     }
 
     /// Whether a model can be chosen now: the client runs, or it ended.
@@ -629,10 +827,22 @@ impl Pane {
         match outcome {
             Outcome::Stay => {}
             Outcome::Close => self.overlay = None,
+            Outcome::Command(name, argument) => {
+                self.overlay = None;
+                self.run_command(&name, &argument, now);
+            }
+            Outcome::Pass(text) => {
+                self.overlay = None;
+                self.pass(&text);
+            }
+            Outcome::Confirmed(Confirmable::Renew) => {
+                self.overlay = None;
+                self.effects.push(PaneEffect::Renew);
+            }
             Outcome::Run(action) => {
                 self.overlay = None;
                 match action {
-                    Action::Harness => self.open_harness(now),
+                    Action::Harness => self.open_harness(None, now),
                     Action::Model => {
                         let choices = self
                             .models
@@ -744,6 +954,11 @@ impl Pane {
             }
             _ => {}
         }
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if key.code == KeyCode::Char('/') && !control && !alt && self.command_starts() {
+            self.overlay = Some(Overlay::command(self.commands(), &self.spec.name));
+            return;
+        }
         if let PanePhase::Ended { .. } = self.phase {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.effects.push(PaneEffect::Quit),
@@ -759,21 +974,65 @@ impl Pane {
         }
         if let Some(child) = &self.child {
             let application_cursor = self.parser.screen().application_cursor();
-            child.send(key_bytes(key, application_cursor));
+            let bytes = key_bytes(key, application_cursor);
+            child.send(match child.line_erase() {
+                Some(erase) => line_bytes(key, bytes, erase),
+                None => bytes,
+            });
+            self.track(key);
             if self.scrollback > 0 {
                 self.scroll_back(-(self.scrollback as isize));
             }
         }
     }
 
+    /// What a key sent to the client does to the line the person types, as far as the pane can
+    /// tell: Enter, Ctrl+C and Ctrl+U leave it empty, a character adds one, Backspace takes one
+    /// away; keys that move in it (arrows, Home, Tab, Esc) leave it unknown, and the screen kit's
+    /// word on its line follows anyway.
+    fn track(&mut self, key: KeyEvent) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        self.typed = match key.code {
+            KeyCode::Enter if !(shift || alt || control) => Some(0),
+            KeyCode::Char('c' | 'u') if control => Some(0),
+            // Backspace, also as the Windows console gives it (Ctrl+H).
+            KeyCode::Backspace if !(alt || control) => self.typed.map(|n| n.saturating_sub(1)),
+            KeyCode::Char('h') if control => self.typed.map(|n| n.saturating_sub(1)),
+            KeyCode::Char('l') if control => self.typed,
+            KeyCode::Char(_) if !(alt || control) => Some(self.typed.unwrap_or(0) + 1),
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Insert | KeyCode::F(_) => self.typed,
+            _ => None,
+        };
+    }
+
     pub fn paste(&mut self, text: &str) {
         self.dirty = true;
+        if let Some(Overlay::Command { line, .. }) = &self.overlay {
+            // Lines pasted after a `/` are no command: they go to the client with what was typed.
+            if text.contains(['\n', '\r']) {
+                let typed = line.text().to_owned();
+                self.overlay = None;
+                self.pass(&typed);
+                self.paste(text);
+                return;
+            }
+        }
         if let Some(overlay) = self.overlay.as_mut() {
             overlay.paste(text);
+            if let Some(passing) = overlay.passing() {
+                self.overlay = None;
+                self.pass(&passing);
+            }
             return;
         }
         if let Some(child) = &self.child {
             child.send(paste_bytes(text, self.parser.screen().bracketed_paste()));
+            let count = text.chars().filter(|c| !c.is_control()).count();
+            if count > 0 {
+                self.typed = Some(self.typed.unwrap_or(0) + count);
+            }
         }
     }
 
@@ -809,9 +1068,24 @@ impl Pane {
             left.push(span(c.to_string(), style));
         }
         left.push(span("  ", Style::default()));
-        left.push(span(self.masker.mask(&self.spec.name).into_owned(), theme.bold()));
+        let name = self.masker.mask(&self.spec.name).into_owned();
+        match brand(&self.spec.harness) {
+            // A security harness's name in its own colours, as its terminal draws it.
+            Some((first, signature)) => {
+                let last = name.chars().count().saturating_sub(1).max(1) as f64;
+                for (i, c) in name.chars().enumerate() {
+                    let colour = theme.mix(first, signature, i as f64 / last);
+                    left.push(span(c.to_string(), Style::new().fg(colour).add_modifier(Modifier::BOLD)));
+                }
+            }
+            None => left.push(span(name, theme.bold())),
+        }
         left.push(span(" · ", theme.muted()));
-        left.push(span(self.masker.mask(&self.spec.model).into_owned(), Style::default()));
+        left.push(span(self.masker.mask(&self.spec.model).into_owned(), theme.muted()));
+        if let Some(target) = self.target_words() {
+            left.push(span(" · target ", theme.muted()));
+            left.push(span(self.masker.mask(&target).into_owned(), Style::default()));
+        }
         let spinner = || span(theme::spinner(now.saturating_duration_since(self.epoch).as_millis()), theme.accent());
         let right: Vec<ratatui::text::Span<'static>> = match &self.phase {
             PanePhase::Starting { since } => vec![
@@ -819,7 +1093,13 @@ impl Pane {
                 span(format!(" starting {}", clock(now.saturating_duration_since(*since))), theme.muted()),
             ],
             PanePhase::Running { since } => {
-                vec![span(format!("running {}", clock(now.saturating_duration_since(*since))), theme.muted())]
+                // A heartbeat: the dot dims every other second, as the clock beside it moves on.
+                let beat = now.saturating_duration_since(self.epoch).as_secs() % 2 == 1;
+                let dot = if beat { Style::new().fg(theme.mix(GREEN, GRAY, 0.55)) } else { theme.good() };
+                vec![
+                    span("● ", dot),
+                    span(format!("running {}", clock(now.saturating_duration_since(*since))), theme.muted()),
+                ]
             }
             PanePhase::Switching { model, step, .. } => {
                 vec![spinner(), span(format!(" switching to {model}: {}", step.to_lowercase()), theme.muted())]
@@ -901,8 +1181,20 @@ impl Pane {
             }
         }
 
-        // The status line: what the VM reaches and the keys, or how the client ended.
+        // The status line: what the VM reaches and the keys (as the screen's line of keys: each key
+        // in sky, what it does muted), or how the client ended.
         let status_y = area.bottom() - 1;
+        let keys = |spans: &mut Vec<ratatui::text::Span<'static>>, keys: &[(&str, &str)]| {
+            for (key, words) in keys {
+                let item = text::width(key) + 1 + text::width(words);
+                if text::spans_width(spans) + 3 + item > width {
+                    break;
+                }
+                spans.push(pad(3));
+                spans.push(span(key.to_string(), theme.accent()));
+                spans.push(span(format!(" {words}"), theme.muted()));
+            }
+        };
         let status: Vec<ratatui::text::Span<'static>> = match &self.phase {
             PanePhase::Ended { message, failed } => {
                 let mut spans = vec![
@@ -910,28 +1202,23 @@ impl Pane {
                     span(if *failed { "■ " } else { "◇ " }, if *failed { theme.bad() } else { theme.good() }),
                     span(self.masker.mask(message).into_owned(), Style::default()),
                 ];
-                let used = text::spans_width(&spans);
-                for hint in
-                    ["  q quit · enter start again · ctrl+p commands", "  q quit · enter start again", "  q quit"]
-                {
-                    if used + text::width(hint) < width {
-                        spans.push(span(hint, theme.muted()));
-                        break;
-                    }
-                }
+                keys(&mut spans, &[("q", "quit"), ("enter", "start again"), ("/", "commands"), ("ctrl+p", "menu")]);
                 spans
             }
             _ => {
-                let mut spans =
-                    vec![pad(1), span(super::draw::reach_words(&self.spec), theme.muted()), span(" · ", theme.muted())];
+                let mut spans = vec![pad(1), span(super::draw::reach_words(&self.spec), theme.muted())];
                 if let Some(note) = self.note_shown(now) {
+                    spans.push(span(" · ", theme.muted()));
                     spans.push(span(self.masker.mask(note).into_owned(), theme.warn()));
                 } else if self.scrollback > 0 {
-                    spans.push(span(format!("{} rows back · shift+pgdn returns", self.scrollback), theme.warn()));
+                    spans.push(span(" · ", theme.muted()));
+                    spans.push(span(format!("{} rows back", self.scrollback), theme.warn()));
+                    keys(&mut spans, &[("shift+pgdn", "returns")]);
                 } else if let PanePhase::Changing { .. } = self.phase {
-                    spans.push(span("switching harness · esc to stop", theme.muted()));
+                    spans.push(span(" · switching harness", theme.muted()));
+                    keys(&mut spans, &[("esc", "to stop")]);
                 } else {
-                    spans.push(span("ctrl+p harness, model · shift+pgup scroll back", theme.muted()));
+                    keys(&mut spans, &[("/", "commands"), ("ctrl+p", "menu"), ("shift+pgup", "scroll back")]);
                 }
                 spans
             }
@@ -975,6 +1262,9 @@ impl Pane {
 
 /// How long the screen waits for a client to end after asking it to.
 pub const STOP_WAIT: Duration = Duration::from_secs(3);
+/// How long a client asked to stop for the next one (/new, another model) has to end, stopping
+/// what it started (a database, a server), before the next one starts anyway.
+pub const RENEW_WAIT: Duration = Duration::from_secs(15);
 /// How long a note stays in the status line.
 pub const NOTE_TIME: Duration = Duration::from_secs(10);
 
@@ -997,6 +1287,60 @@ mod tests {
         assert_eq!(key_bytes(key(KeyCode::F(5), KeyModifiers::NONE), false), b"\x1b[15~");
         assert_eq!(paste_bytes("a\nb", true), b"\x1b[200~a\rb\x1b[201~");
         assert_eq!(paste_bytes("a\r\nb\x1b", false), b"a\rb");
+    }
+
+    #[test]
+    fn a_line_read_whole_takes_backspace_as_its_erase_and_no_codes() {
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        let line = |k: KeyEvent| line_bytes(k, key_bytes(k, false), 0x7f);
+        // Backspace as the Windows console gives it (Ctrl+H), as other terminals give it, and with Ctrl.
+        assert_eq!(line(key(KeyCode::Char('h'), KeyModifiers::CONTROL)), [0x7f]);
+        assert_eq!(line(key(KeyCode::Backspace, KeyModifiers::NONE)), [0x7f]);
+        assert_eq!(line(key(KeyCode::Backspace, KeyModifiers::CONTROL)), [0x7f]);
+        assert_eq!(line_bytes(key(KeyCode::Backspace, KeyModifiers::NONE), vec![0x7f], 0x08), [0x08]);
+        // Keys a line cannot use send nothing instead of their codes.
+        for code in [KeyCode::Left, KeyCode::Up, KeyCode::Delete, KeyCode::Home, KeyCode::End, KeyCode::F(5), KeyCode::Esc] {
+            assert_eq!(line(key(code, KeyModifiers::NONE)), Vec::<u8>::new(), "{code:?}");
+        }
+        assert_eq!(line(key(KeyCode::Char('b'), KeyModifiers::ALT)), Vec::<u8>::new());
+        // The rest as before; Shift+Enter sends the line.
+        assert_eq!(line(key(KeyCode::Char('a'), KeyModifiers::NONE)), b"a");
+        assert_eq!(line(key(KeyCode::Char('c'), KeyModifiers::CONTROL)), [3]);
+        assert_eq!(line(key(KeyCode::Char('u'), KeyModifiers::CONTROL)), [0x15]);
+        assert_eq!(line(key(KeyCode::Enter, KeyModifiers::SHIFT)), b"\r");
+        assert_eq!(line(key(KeyCode::Tab, KeyModifiers::NONE)), b"\t");
+        // A terminal without an erase character keeps the key's own byte.
+        assert_eq!(line_bytes(key(KeyCode::Char('h'), KeyModifiers::CONTROL), vec![0x08], 0), [0x08]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_pane_reads_whether_its_client_reads_whole_lines() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut spec: EngineSpec = serde_json::from_value(serde_json::json!({
+            "harness": "test", "name": "Test", "category": "coding", "protocol": "terminal",
+            "argv": ["/bin/sh", "-c", "stty -icanon; echo raw; sleep 1; stty icanon; echo line; sleep 5"],
+            "cwd": "/", "model": "m", "state_dir": "/tmp"
+        }))
+        .unwrap();
+        spec.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let child = spawn(&spec, 10, 40, 1, None, Depth::None, tx).unwrap();
+        let mut seen = String::new();
+        let started = Instant::now();
+        let mut modes = Vec::new();
+        while started.elapsed() < Duration::from_secs(4) && !seen.contains("line") {
+            if let Ok(Message::Output(_, bytes)) = rx.try_recv() {
+                seen.push_str(&String::from_utf8_lossy(&bytes));
+                if seen.contains("raw") && modes.is_empty() {
+                    modes.push(child.line_erase());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        modes.push(child.line_erase());
+        assert_eq!(modes.first(), Some(&None), "raw mode: the client reads keys itself");
+        assert!(matches!(modes.last(), Some(Some(_))), "canonical mode: {modes:?} after {seen:?}");
     }
 
     #[test]

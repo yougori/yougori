@@ -72,6 +72,24 @@ def bounded(value, most):
     return isinstance(value, str) and len(value) <= most and "\0" not in value
 
 
+def whole(data, limit=65536):
+    """How many of the screen output's first bytes, at most `limit`, end on a whole UTF-8 character:
+    the bytes of one whose last bytes have not come yet wait for the next /poll. The Windows launcher
+    writes each packet to the console and flushes it, and Python's console writer waits forever on
+    the first bytes of a character whose others are in the next packet: the session froze (Ctrl+]
+    with it) whenever a packet ended inside a box-drawing character. Bytes that are no part of a
+    character go as they are."""
+    end = min(len(data), limit)
+    start = end
+    while start > 0 and end - start < 3 and data[start - 1] & 0xC0 == 0x80:
+        start -= 1
+    if start == 0:
+        return end
+    lead = data[start - 1]
+    size = 2 if lead & 0xE0 == 0xC0 else 3 if lead & 0xF0 == 0xE0 else 4 if lead & 0xF8 == 0xF0 else 1
+    return end if end - (start - 1) >= size else start - 1
+
+
 def target_list(data):
     """The /start's targets (`host[:port]`, at most 64), checked."""
     targets = data.get("targets", [])
@@ -622,10 +640,14 @@ class Control(Handler):
                 return self.send_json(200, {"started": True, "tunnels": True, "yougori": True, "targets": True})
             if self.path == "/poll":
                 with state.lock:
-                    state.lock.wait_for(lambda: state.output or state.requests or (state.tunnels and state.tunnels.events) or
+                    state.lock.wait_for(lambda: whole(state.output) or state.requests or (state.tunnels and state.tunnels.events) or
                         state.exit_code is not None or (state.switch is not None and state.switch["state"] == "waiting"), timeout=5)
-                    output = bytes(state.output[:65536])
-                    del state.output[:len(output)]
+                    size = whole(state.output)
+                    output = bytes(state.output[:size])
+                    del state.output[:size]
+                    if state.exit_code is not None and state.output and not whole(state.output):
+                        # All that is left is the start of a character the harness never finished.
+                        del state.output[:]
                     requests = [state.requests.popleft()] if state.requests else []
                     tunnels = state.tunnels.take() if state.tunnels else []
                     switch = state.switch_take()

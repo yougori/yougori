@@ -554,6 +554,23 @@ impl Production {
         Ok((sandbox, result))
     }
 
+    /// What the guest of `sandbox` materializes for its image: its layers' expanded bytes, or 0
+    /// for a VM without an image.
+    pub(super) fn image_expanded_bytes(&self, sandbox: &SandboxId) -> u64 {
+        self.images
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .held
+            .get(sandbox)
+            .map_or(0, |held| {
+                held.record
+                    .image
+                    .layers
+                    .iter()
+                    .fold(0u64, |sum, layer| sum.saturating_add(layer.expanded_bytes))
+            })
+    }
+
     fn hold_image(&self, sandbox: &SandboxId, record: ImageRecord) -> Result<(), String> {
         // Consumer staging also reads bounded layer buffers on the host, independently
         // of the guest's root allocation. Keep their reservation through every copy.

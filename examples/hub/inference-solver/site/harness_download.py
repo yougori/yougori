@@ -11,7 +11,7 @@ import zipfile
 from harnesses.transport import local_hostname
 
 ROOT = Path(__file__).resolve().parent / "harnesses"
-FILES = ("solver.py", "device_login.py", "transport.py", "vm_host.py", "vm_relay.py", "vm_guest.py", "vm_package.py", "vm_tunnel.py", "shannon_cli.py", "pentagi_cli.py", "install_shannon.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go", "hexstrike_cli.py", "plandex_cli.py", "strix_cli.py", "cli_entry.py", "packages.json", "installer.py", "profiles.py", "runtime.py", "relay.py", "blue.py", "README.md")
+FILES = ("solver.py", "device_login.py", "transport.py", "vm_host.py", "vm_relay.py", "vm_guest.py", "vm_package.py", "vm_tunnel.py", "shannon_cli.py", "pentagi_cli.py", "install_shannon.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go", "hexstrike_cli.py", "plandex_cli.py", "strix_cli.py", "terminal_ui.py", "cli_entry.py", "packages.json", "installer.py", "profiles.py", "runtime.py", "relay.py", "blue.py", "README.md")
 
 # Official CPython Windows embeddable distributions, fetched over HTTPS and pinned.
 # https://www.python.org/downloads/release/python-31410/

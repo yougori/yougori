@@ -26,7 +26,7 @@ RUN python3 installer.py "$HARNESS" \
     && printf '%s' "$HARNESS" > harness-name \
     && tar -czf tool.tar.gz tool $(test ! -d source || printf source) \
     && rm -rf tool source /home/node/.cache
-COPY relay.py transport.py blue.py profiles.py runtime.py vm_guest.py vm_package.py vm_tunnel.py hexstrike_cli.py plandex_cli.py strix_cli.py shannon_cli.py pentagi_cli.py ./
+COPY relay.py transport.py blue.py profiles.py runtime.py vm_guest.py vm_package.py vm_tunnel.py hexstrike_cli.py plandex_cli.py strix_cli.py shannon_cli.py pentagi_cli.py terminal_ui.py ./
 USER 0:0
 RUN if [ "$HARNESS" = plandex ]; then apt-get purge -y golang-go golang-1.24-go golang-1.24-src golang-src build-essential gcc g++ make && apt-get autoremove -y && rm -rf /usr/share/doc /usr/share/man /var/lib/postgresql /home/node/go /usr/share/i18n /var/lib/dpkg /usr/lib/postgresql/17/lib/bitcode; fi
 RUN if [ "$HARNESS" = pentagi ]; then apt-get purge -y golang-go golang-1.24-go golang-1.24-src golang-src && apt-get autoremove -y && rm -rf /usr/share/doc /usr/share/man /var/lib/postgresql /home/node/go /usr/share/i18n /var/lib/dpkg /usr/lib/postgresql/17/lib/bitcode; fi

@@ -82,6 +82,10 @@ const SOURCES: &[(&str, &[u8])] = &[
         include_bytes!("../../examples/hub/inference-solver/site/harnesses/strix_cli.py"),
     ),
     (
+        "terminal_ui.py",
+        include_bytes!("../../examples/hub/inference-solver/site/harnesses/terminal_ui.py"),
+    ),
+    (
         "cli_entry.py",
         include_bytes!("../../examples/hub/inference-solver/site/harnesses/cli_entry.py"),
     ),

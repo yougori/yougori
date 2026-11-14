@@ -637,6 +637,34 @@ class SetupFiles(unittest.TestCase):
         self.assertEqual(self.post(server, "/poll"), {"output": base64.b64encode(b"bye").decode(), "requests": [], "tunnels": [], "exit": 3})
         self.assertEqual(self.post(server, "/finish"), {"exit": 3}, "a session that ended is not signalled")
 
+    def test_a_packet_of_the_screen_never_ends_inside_a_character(self):
+        """The Windows launcher writes each packet to the console and flushes it; Python's console
+        writer waited forever on a box-drawing character cut in two, and the session froze (14 Nov
+        2026, the input box's border redrawn as its colours moved)."""
+        class Running:
+            pid = 4321
+
+            def wait(self):
+                return 0
+        state = self.guest(Running())
+        server = ThreadingHTTPServer(("127.0.0.1", 0), vm_guest.Control)
+        server.state = state
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        line = "─".encode()
+        state.output.extend(b"box " + line[:2])
+        self.assertEqual(base64.b64decode(self.post(server, "/poll")["output"]), b"box ", "its end waits for the rest")
+        state.output.extend(line[2:] + b" done")
+        self.assertEqual(base64.b64decode(self.post(server, "/poll")["output"]), line + b" done")
+        state.output.extend(b"x" * 65535 + line)
+        self.assertEqual(len(base64.b64decode(self.post(server, "/poll")["output"])), 65535, "the 64 KiB cut moves back")
+        self.assertEqual(base64.b64decode(self.post(server, "/poll")["output"]), line)
+        # A harness that ended inside a character: the rest of it cannot show, and the exit comes.
+        state.output.extend(line[:1])
+        state.exit_code = 0
+        self.assertEqual(self.post(server, "/poll"), {"output": "", "requests": [], "tunnels": [], "exit": 0})
+
     def post(self, server, path):
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
         try:

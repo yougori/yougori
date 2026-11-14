@@ -2,6 +2,18 @@
 //! command and its skill were actually installed, not merely saved as preferences.
 use super::*;
 
+/// How long a new VM's first commands (its grid tools, its setup package) may take. In a VM of
+/// an image the first command also waits until the guest has materialized the image's root in
+/// memory (appliance/agent/cmd/yougori-sandbox-agent/oci_image_linux.go), which takes longer
+/// the more its layers expand to: a desktop took about 22 s for 338 MiB, and a flat 30 s failed
+/// its 555 MiB and 591 MiB harness images. So the image adds time at a quarter of that speed.
+const SETUP_WITHIN: Duration = Duration::from_secs(30);
+const MATERIALIZED_BYTES_PER_SECOND: u64 = 4 << 20;
+
+fn setup_within(expanded_bytes: u64) -> Duration {
+    SETUP_WITHIN + Duration::from_secs(expanded_bytes / MATERIALIZED_BYTES_PER_SECOND)
+}
+
 pub(super) fn selected(params: &Value) -> Result<Vec<String>, String> {
     let values = match params.get("gridHosting") {
         None | Some(Value::Null) => return Ok(Vec::new()),
@@ -26,7 +38,13 @@ impl Production {
         let prepared = (|| {
             self.ensure_author_workspace(sandbox)?;
             let command = format!("{CONFINEMENT_PROBE} setup init\n");
-            let outcome = self.service.exec(sandbox, ExecRequest::new(command.into_bytes(), 4096, Duration::from_secs(30)))
+            let within = setup_within(self.image_expanded_bytes(sandbox));
+            let outcome = self
+                .service
+                .exec(
+                    sandbox,
+                    ExecRequest::new(command.into_bytes(), 4096, within),
+                )
                 .map_err(|error| format!("Setup package installation: {error}"))?;
             if outcome.exit_code != Some(0) {
                 return Err("The VM guest needs the current Yougori setup package. Rebuild/update the guest.".to_owned());
@@ -96,7 +114,11 @@ impl Production {
             .service
             .exec(
                 sandbox,
-                ExecRequest::new(command.into_bytes(), 16 << 10, Duration::from_secs(30)),
+                ExecRequest::new(
+                    command.into_bytes(),
+                    16 << 10,
+                    setup_within(self.image_expanded_bytes(sandbox)),
+                ),
             )
             .map_err(|e| format!("Grid tool installation: {e}"))?;
         if outcome.exit_code != Some(0) {
@@ -129,5 +151,14 @@ mod tests {
         ] {
             assert!(selected(&json!({"gridHosting":value})).is_err());
         }
+    }
+
+    #[test]
+    fn a_vms_first_commands_wait_for_its_image_by_its_size() {
+        assert_eq!(setup_within(0), Duration::from_secs(30));
+        // The 555 MiB postgres base, which a flat 30 s failed on a desktop that materializes
+        // about 15 MiB a second.
+        assert_eq!(setup_within(555 << 20), Duration::from_secs(30 + 138));
+        assert!(setup_within(u64::MAX) > Duration::from_secs(30));
     }
 }

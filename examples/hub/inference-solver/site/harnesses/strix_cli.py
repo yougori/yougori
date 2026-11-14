@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 
+from terminal_ui import screen
+
 # Strix's sandbox is this VM, not a container beside the person's computer: a target on loopback
 # (the practice app) is this VM's own, so it is not rewritten to Docker's host gateway name.
 HOST_GATEWAY = '127.0.0.1'
@@ -144,12 +146,15 @@ def main():
     with (Path.home()/'caido.log').open('w') as log:
         sidecar=subprocess.Popen(['/opt/solver/tool/bin/caido-cli','--listen','127.0.0.1:48080','--allow-guests','--no-logging','--no-open'],stdout=log,stderr=log)
         try:
-            for _ in range(120):
-                if sidecar.poll() is not None: raise ValueError('Caido stopped; inspect ~/caido.log inside the VM.')
-                try:
-                    with socket.create_connection(('127.0.0.1',48080),timeout=1): break
-                except OSError: time.sleep(.25)
-            else: raise ValueError('Caido startup timed out.')
+            # The screen's row turns until Strix's own screen takes over the terminal.
+            with screen.working('Starting Strix',hint='') as starting:
+                starting.detail='its proxy, Caido'
+                for _ in range(120):
+                    if sidecar.poll() is not None: raise ValueError('Caido stopped; inspect ~/caido.log inside the VM.')
+                    try:
+                        with socket.create_connection(('127.0.0.1',48080),timeout=1): break
+                    except OSError: time.sleep(.25)
+                else: raise ValueError('Caido startup timed out.')
             entry.main()
         finally:
             sidecar.terminate()
@@ -157,7 +162,8 @@ def main():
             except subprocess.TimeoutExpired: sidecar.kill(); sidecar.wait()
             reports.copy()
             if reports.copied and os.environ.get('SOLVER_EMPTY_WORKSPACE')!='1':
-                print("Strix's report is in reports/strix in the workspace. It comes back to your folder after your review.",flush=True)
+                screen.gap()
+                screen.say("Strix's report is in reports/strix in the workspace. It comes back to your folder after your review.",'good','◇')
 
 
 if __name__=='__main__': main()

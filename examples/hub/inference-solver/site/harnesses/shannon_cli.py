@@ -1,4 +1,5 @@
-"""Shannon's worker and Temporal service inside one networkless Yougori VM."""
+"""Shannon's worker and Temporal service inside one networkless Yougori VM. Its terminal draws in
+the Yougori screen's look (terminal_ui.py)."""
 import argparse
 import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,8 @@ import threading
 import time
 import uuid
 from urllib.parse import urlsplit
+
+from terminal_ui import screen
 
 
 def parser():
@@ -105,7 +108,10 @@ def stop_worker(process):
         except ProcessLookupError: pass
 
 
-def worker(command,environment,source,log_path,verbose=False):
+def worker(command,environment,source,log_path,verbose=False,said=None):
+    """Runs Shannon's worker; its exit code. The lines that say how the run went go to `said` (a
+    list: they show under the run's row) or straight to the screen; the rest only to the log
+    (all of it on the screen with `verbose`)."""
     lines=queue.Queue(maxsize=256)
     with log_path.open('w',encoding='utf-8') as log:
         process=subprocess.Popen(command,env=environment,cwd=source,stdout=subprocess.PIPE,
@@ -115,24 +121,22 @@ def worker(command,environment,source,log_path,verbose=False):
             for line in process.stdout: lines.put(line)
             lines.put(None)
         threading.Thread(target=read,daemon=True).start()
-        began=time.monotonic()
-        next_update=began+10
         try:
+            # The screen's row turns while the worker runs; its lines that say how the run went
+            # show above it, the rest goes to the log (all of it with --verbose).
             while True:
                 try: line=lines.get(timeout=1)
                 except queue.Empty: line=''
                 if line is None: break
                 if line:
                     log.write(line);log.flush()
-                    if verbose: print(line,end='',flush=True)
+                    if verbose: screen.say(line.rstrip())
                     elif line.startswith(('Model validated.', 'Scan completed', 'Scan failed', 'Duration:', 'Agents resolved:', 'Total turns:')):
-                        print(line.rstrip(),flush=True)
-                if not verbose and time.monotonic()>=next_update:
-                    print('Shannon is working... '+str(int(time.monotonic()-began))+'s',flush=True)
-                    next_update=time.monotonic()+10
+                        if said is None: screen.say(line.strip(),'')
+                        else: said.append(line.strip())
             code=process.wait()
             if code:
-                print('Shannon stopped with an error (exit '+str(code)+'). Details: '+str(log_path),flush=True)
+                screen.say('Shannon stopped with an error (exit '+str(code)+'). Details: '+str(log_path),'bad')
             return code
         finally:
             stop_worker(process)
@@ -152,6 +156,13 @@ Reports go to .shannon/runs in the workspace.
 Use solver-shannon --workspace "C:\\path\\to\\project" to work on a project copy.'''
 
 
+def reach_words():
+    mode,targets = reach()
+    if mode=='full': return 'the internet'
+    if targets: return 'the inference and '+', '.join(targets)
+    return 'only the inference'
+
+
 def help_text():
     mode,targets = reach()
     if mode=='full': where = 'This VM reaches the internet.'
@@ -160,40 +171,75 @@ def help_text():
     return HELP.format(reach=where)
 
 
+def show_help():
+    """The commands as a list under a heading, their names in the screen's sky, then the rest of
+    help_text() as notes."""
+    lines = help_text().split('\n')
+    commands = [line.strip() for line in lines[1:] if line.startswith('  ')]
+    screen.section('Commands')
+    screen.pairs([(entry[:16].strip(), entry[16:].strip()) for entry in commands], key='accent')
+    screen.gap()
+    for line in lines[len(commands)+1:]:
+        if line.strip(): screen.say(line.strip())
+
+
+# The commands Tab completes, and the keys under the input box.
+COMMANDS = ('scan', 'check', 'logs', 'shell', 'help', 'exit')
+KEYS = (('enter', 'run'), ('tab', 'complete'), ('↑↓', 'earlier commands'), ('exit', 'leave'))
+
+
 def banner(args):
-    print('\n\x1b[34mShannon | Inference Solver\x1b[0m\nModel: '+args.model+'\n',flush=True)
+    screen.banner('Shannon', args.model, [('Reports', '.shannon/runs in the workspace'), ('Reach', reach_words())])
+
+
+class HangUp(KeyboardInterrupt):
+    """The session was hung up (the launcher ended it): Shannon ends, as on Ctrl+C at its prompt."""
 
 
 def session(args,greet=True):
     if greet: banner(args)
-    print(help_text(),flush=True)
+    show_help()
     while True:
         try:
-            command=input('\nshannon> ').strip()
+            command=screen.ask('scan URL · check · logs · shell · help · exit',KEYS,COMMANDS,'\nshannon> ','shannon').strip()
+        except (EOFError,KeyboardInterrupt):
+            screen.gap();screen.say('Closing Shannon.')
+            return 0
+        try:
             if not command: continue
             words=shlex.split(command)
             if words in (['exit'],['quit']): return 0
-            if words==['help']: print(help_text(),flush=True)
+            if words==['help']: show_help()
             elif words==['shell']:
-                print('VM shell. Start your local service here; type exit to return to Shannon.',flush=True)
-                subprocess.call(['/bin/sh','-i'])
+                screen.say('VM shell. Start your local service here; type exit to return to Shannon.')
+                with screen.suspended():
+                    subprocess.call(['/bin/sh','-i'])
             elif words==['logs']:
                 path=Path.home()/'shannon-worker.log'
-                print(path.read_text(encoding='utf-8') if path.is_file() else 'No worker has run in this session.',flush=True)
+                if path.is_file():
+                    screen.section('Worker log · '+str(path))
+                    screen.output(path.read_text(encoding='utf-8',errors='replace'),limit=200,tail=True)
+                else: screen.say('No worker has run in this session.')
             elif words==['check'] or (len(words)==2 and words[0]=='scan'):
                 scan=words[0]=='scan'
                 if scan and os.environ.get('SOLVER_EMPTY_WORKSPACE')=='1':
-                    print('Select a project first: solver-shannon --workspace "C:\\path\\to\\project"',flush=True)
+                    screen.warn('Select a project first: solver-shannon --workspace "C:\\path\\to\\project"')
                     continue
                 target=target_url(words[1]) if scan else None
                 code=run_once(argparse.Namespace(**{**vars(args),'target':target,'validate_model':not scan}))
-                if code: print('Type logs for details or check to retry the connection.',flush=True)
-            else: print('Unknown command. Type help.',flush=True)
-        except (EOFError,KeyboardInterrupt):
-            print('\nClosing Shannon.',flush=True)
+                if code: screen.say('Type logs for details or check to retry the connection.')
+            else: screen.warn('Unknown command. Type help.')
+        except HangUp:
+            screen.gap();screen.say('Closing Shannon.')
+            return 0
+        except KeyboardInterrupt:
+            # Ctrl+C while a check or scan runs stops it; Shannon stays open.
+            screen.warn('Stopped. Shannon stays open for more commands.')
+        except EOFError:
+            screen.gap();screen.say('Closing Shannon.')
             return 0
         except (ValueError,OSError) as error:
-            print(str(error),flush=True)
+            screen.error(str(error))
 
 
 def models_config(args):
@@ -373,7 +419,9 @@ def run_once(args):
                '--task-queue','solver-'+uuid.uuid4().hex]
     if args.validate_model: command.append('--validate-model')
     if args.config: command += ['--config',str(args.config.resolve(strict=True))]
-    with (home/'shannon-temporal.log').open('w') as log:
+    # The check or the scan turns on a row of its own while it runs, then says how it went.
+    kind,title = ('Check','the model connection') if args.validate_model else ('Scan',args.target)
+    with (home/'shannon-temporal.log').open('w') as log, screen.step(kind,title,'ctrl+c to stop') as step:
         process = subprocess.Popen(['/opt/solver/tool/bin/temporal','server','start-dev','--ip','127.0.0.1',
                                     '--headless','--db-filename',str(home/'shannon-temporal.sqlite')],stdout=log,stderr=log)
         try:
@@ -383,13 +431,18 @@ def run_once(args):
                     with socket.create_connection(('127.0.0.1',7233),timeout=1): break
                 except OSError: time.sleep(.25)
             else: raise ValueError('Temporal startup timed out.')
-            print('Checking the model connection...' if args.validate_model else 'Running Shannon on '+args.target+'...',flush=True)
             # The model check's folder is in the home already. The worker has stopped when worker()
             # returns, so no checkpoint can follow the .git file out of the workspace, and it writes
             # no browser config after playwright_config takes it out.
             with contextlib.nullcontext() if validation_site is not None else deliverables_git(workspace,home,environment), \
                     playwright_config(workspace):
-                return worker(command,environment,source,home/'shannon-worker.log',args.verbose)
+                said = []
+                try:
+                    code = worker(command,environment,source,home/'shannon-worker.log',args.verbose,said)
+                finally:
+                    step.output = '\n'.join(said)
+            if code: step.fail()
+            return code
         finally:
             if validation_site: validation_site.shutdown();validation_site.server_close()
             process.terminate()
@@ -404,28 +457,31 @@ def scans(args,targets):
     for target in targets: target_url(target)
     banner(args)
     if os.environ.get('SOLVER_EMPTY_WORKSPACE')=='1':
-        print('Select a project first: solver-shannon --workspace "C:\\path\\to\\project"',flush=True)
+        screen.warn('Select a project first: solver-shannon --workspace "C:\\path\\to\\project"')
         return session(args,greet=False)
     for index,target in enumerate(targets,1):
-        if len(targets)>1: print('Target '+str(index)+' of '+str(len(targets))+': '+target,flush=True)
+        if len(targets)>1: screen.say('Target '+str(index)+' of '+str(len(targets))+': '+target,'')
         try:
             code=run_once(argparse.Namespace(**{**vars(args),'target':target,'validate_model':False}))
+        except HangUp:
+            raise
         except KeyboardInterrupt:
-            print('\nStopped the scans.',flush=True)
+            screen.warn('Stopped the scans.')
             break
         except (ValueError,OSError) as error:
-            print(str(error),flush=True);code=1
-        if code: print('Type logs for details of this scan.',flush=True)
-    print('Reports are in .shannon/runs in the workspace. Shannon stays open for more commands.',flush=True)
+            screen.error(str(error));code=1
+        if code: screen.say('Type logs for details of this scan.')
+    screen.gap()
+    screen.say('Reports are in .shannon/runs in the workspace. Shannon stays open for more commands.')
     return session(args,greet=False)
 
 
 def hang_up_cleanly():
-    """A hangup or SIGTERM ends Shannon as Ctrl+C does, so its worker stops and its deliverables'
-    .git file leaves the workspace. A session that the launcher ends gets a hangup first
-    (vm_guest /finish)."""
+    """A hangup or SIGTERM ends Shannon as Ctrl+C does at its prompt, so its worker stops and its
+    deliverables' .git file leaves the workspace. A session that the launcher ends gets a hangup
+    first (vm_guest /finish)."""
     def interrupt(number, frame):
-        raise KeyboardInterrupt
+        raise HangUp
     for name in ('SIGHUP','SIGTERM'):
         if hasattr(signal,name):
             signal.signal(getattr(signal,name),interrupt)
@@ -446,4 +502,11 @@ def main(argv=None):
 
 if __name__=='__main__':
     hang_up_cleanly()
-    sys.exit(main())
+    try:
+        with screen.session():
+            code=main()
+    except KeyboardInterrupt:
+        code=0
+    except (ValueError,OSError) as error:
+        screen.error(str(error));code=1
+    sys.exit(code)

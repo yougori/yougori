@@ -569,6 +569,25 @@ enum Switch {
     Reverting { note: String },
 }
 
+/// A client asked to stop so the next one can start (/new, another model): the next one starts
+/// once it has ended, so what it started (a database, a server) has stopped first, or after
+/// RENEW_WAIT when it does not end.
+struct Stopping {
+    child: pane::Child,
+    since: Instant,
+    next: EngineSpec,
+    ended: bool,
+}
+
+/// Marks the stopping client ended when its end arrives.
+fn note_end(stopping: &mut Option<Stopping>, message: &pane::Message) {
+    if let (Some(stop), pane::Message::Exited(generation, _)) = (stopping.as_mut(), message) {
+        if *generation == stop.child.generation {
+            stop.ended = true;
+        }
+    }
+}
+
 /// Work the terminal pane waits for besides output and keys. A few at a time, so their size does
 /// not matter.
 #[allow(clippy::large_enum_variant)]
@@ -624,6 +643,8 @@ async fn run_pane(
     let mut quitting: Option<Instant> = None;
     // A model switch in progress.
     let mut switching: Option<Switch> = None;
+    // A client stopping for the next one.
+    let mut stopping: Option<Stopping> = None;
     let mut next_generation = 1u64;
     let mut last_second = 0u64;
     pane.effects.push(PaneEffect::Start);
@@ -633,14 +654,30 @@ async fn run_pane(
         for effect in std::mem::take(&mut pane.effects) {
             match effect {
                 PaneEffect::Start => {
-                    if jobs.is_empty() && quitting.is_none() {
+                    if jobs.is_empty() && stopping.is_none() && quitting.is_none() {
                         pane.child = None;
                         pane.phase = PanePhase::Starting { since: now };
                         start = Some(pane.spec.clone());
                     }
                 }
+                PaneEffect::Renew => {
+                    if quitting.is_none() && jobs.is_empty() && stopping.is_none() {
+                        pane.renewing(now);
+                        match pane.child.take() {
+                            Some(mut child) => {
+                                child.kill();
+                                // What it prints while it stops is its own: the next screen is fresh.
+                                pane.generation = 0;
+                                stopping = Some(Stopping { child, since: now, next: pane.spec.clone(), ended: false });
+                            }
+                            None => start = Some(pane.spec.clone()),
+                        }
+                    } else if quitting.is_none() {
+                        pane.wait_to_renew(now);
+                    }
+                }
                 PaneEffect::Restart(model) => {
-                    if quitting.is_none() && jobs.is_empty() {
+                    if quitting.is_none() && jobs.is_empty() && stopping.is_none() {
                         pane.switch_preparing(&model, now);
                         let spec = pane.spec.clone();
                         jobs.push(
@@ -701,8 +738,22 @@ async fn run_pane(
             pane.generation = next_generation;
             next_generation += 1;
         }
+        // The client stopping for the next one has ended (or had its time): the next one starts.
+        if stopping.as_ref().is_some_and(|s| s.ended || now.saturating_duration_since(s.since) >= pane::RENEW_WAIT) {
+            if let Some(Stopping { child, next, .. }) = stopping.take() {
+                drop(child);
+                if quitting.is_none() {
+                    let (rows, cols) = pane::pane_size(io.screen.area().width, io.screen.area().height);
+                    jobs.push(pane_start(next, rows, cols, next_generation, pane.theme.depth, tx.clone()));
+                    pane.generation = next_generation;
+                    next_generation += 1;
+                }
+                pane.dirty = true;
+            }
+        }
         if let Some(since) = quitting {
-            if pane.child.is_none() || now.saturating_duration_since(since) >= pane::STOP_WAIT {
+            let ended = pane.child.is_none() && stopping.as_ref().is_none_or(|s| s.ended);
+            if ended || now.saturating_duration_since(since) >= pane::STOP_WAIT {
                 break;
             }
         }
@@ -744,10 +795,14 @@ async fn run_pane(
             },
             Some(message) = rx.recv() => {
                 let now = Instant::now();
+                note_end(&mut stopping, &message);
                 pane.message(message, now);
                 for _ in 0..BATCH {
                     match rx.try_recv() {
-                        Ok(message) => pane.message(message, now),
+                        Ok(message) => {
+                            note_end(&mut stopping, &message);
+                            pane.message(message, now);
+                        }
                         Err(_) => break,
                     }
                 }
@@ -815,18 +870,25 @@ async fn run_pane(
                         }
                     }
                     PaneJob::Respecced(model, Ok(next)) => {
-                        // Stop the running client, then start the new one in a fresh screen.
-                        if let Some(mut child) = pane.child.take() {
-                            child.kill();
-                        }
+                        // Stop the running client; the new one starts in a fresh screen once it
+                        // has ended.
                         pane.switch_from = None;
                         switching = Some(Switch::Trying { model: model.clone(), previous: pane.spec.clone() });
                         pane.spec = next.clone();
                         pane.phase = PanePhase::Switching { model, since: now, step: "Starting".into() };
-                        let (rows, cols) = pane::pane_size(io.screen.area().width, io.screen.area().height);
-                        jobs.push(pane_start(next, rows, cols, next_generation, pane.theme.depth, tx.clone()));
-                        pane.generation = next_generation;
-                        next_generation += 1;
+                        match pane.child.take() {
+                            Some(mut child) => {
+                                child.kill();
+                                pane.generation = 0;
+                                stopping = Some(Stopping { child, since: now, next, ended: false });
+                            }
+                            None => {
+                                let (rows, cols) = pane::pane_size(io.screen.area().width, io.screen.area().height);
+                                jobs.push(pane_start(next, rows, cols, next_generation, pane.theme.depth, tx.clone()));
+                                pane.generation = next_generation;
+                                next_generation += 1;
+                            }
+                        }
                     }
                     PaneJob::Respecced(model, Err(error)) => pane.switch_refused(&model, &format!("{error:#}"), now),
                 }

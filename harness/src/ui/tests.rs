@@ -1697,6 +1697,7 @@ fn a_client_is_told_when_the_screen_shows_no_colour() {
         [("PATH", "/usr/bin"), ("COLORTERM", "truecolor")].into_iter().map(|(k, v)| (k.into(), v.into())).collect();
     let plain = pane::client_env(&spec, Depth::None);
     assert_eq!(plain.get("NO_COLOR").map(String::as_str), Some("1"));
+    assert_eq!(plain.get("YOUGORI_PANE").map(String::as_str), Some("1"), "the screen kit says where its line is empty");
     assert!(!plain.contains_key("COLORTERM"), "nor that it has 24-bit colour");
     assert_eq!(plain.get("TERM").map(String::as_str), Some("xterm-256color"));
     let coloured = pane::client_env(&spec, Depth::Ansi256);
@@ -1920,11 +1921,173 @@ fn the_terminal_pane_switches_harness_from_its_palette() {
     assert!(matches!(pane.effects.as_slice(), [pane::PaneEffect::Switch(_)]));
     assert!(matches!(&pane.phase, PanePhase::Changing { name, .. } if name == "Kilo Code"));
     let text = pane_text(&mut pane, 100, 30, t0);
-    assert!(text.contains("switching harness · esc to stop"), "{text}");
+    assert!(text.contains("switching harness   esc to stop"), "{text}");
     pane.effects.clear();
     pane.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), t0);
     assert_eq!(pane.effects, [pane::PaneEffect::CancelSwitch]);
     // A failure in place: the harness before starts again.
     assert!(pane.change_failed("Not published.", t0));
     assert!(matches!(pane.phase, PanePhase::Starting { .. }));
+}
+
+// ---- Yougori's commands typed in the terminal pane (14 Nov 2026) ----
+
+fn press(pane: &mut Pane, text: &str, now: Instant) {
+    for c in text.chars() {
+        pane.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), now);
+    }
+}
+
+fn tap(pane: &mut Pane, code: KeyCode, now: Instant) {
+    pane.key(KeyEvent::new(code, KeyModifiers::NONE), now);
+}
+
+#[test]
+fn yougoris_commands_are_typed_in_the_terminal_pane() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+    runtime.block_on(async move {
+        let t0 = Instant::now();
+        let mut spec = pane_spec(long_running_client());
+        spec.session = switching_spec().session;
+        let mut pane = Pane::new(spec.clone(), Theme::new(Depth::True), Masker::default(), 100, 30, t0);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rows, cols) = pane::pane_size(100, 30);
+        let child = pane::spawn(&spec, rows, cols, 1, None, Depth::True, tx).expect("the client starts");
+        pane.started(child, t0);
+        // A `/` at the start of the line: Yougori's commands, as in the chat; /exit stays the
+        // client's own while it runs.
+        press(&mut pane, "/", t0);
+        let text = pane_text(&mut pane, 100, 30, t0);
+        for shown in ["Yougori's commands", "/harness", "/model", "/new", "start Aider again, fresh", "/help"] {
+            assert!(text.contains(shown), "{shown}: {text}");
+        }
+        assert!(!text.contains("/exit"), "{text}");
+        // A name typed in part is completed; the whole name opens the model picker.
+        press(&mut pane, "mo", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(&pane.overlay, Some(Overlay::Command { line, .. }) if line.text() == "/model "));
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(pane.overlay, Some(Overlay::Picker { .. })), "the model picker");
+        tap(&mut pane, KeyCode::Esc, t0);
+        // A model named: switching restarts the client, so it is asked first.
+        press(&mut pane, "/model gpt-oss-20b", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(&pane.overlay, Some(Overlay::Confirm { title, .. }) if title == "Switch to gpt-oss-20b?"));
+        tap(&mut pane, KeyCode::Esc, t0);
+        press(&mut pane, "/model nonesuch", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(pane_text(&mut pane, 100, 30, t0).contains("There is no model nonesuch here."));
+        // /new asks, then starts the client fresh.
+        press(&mut pane, "/new", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(&pane.overlay, Some(Overlay::Confirm { title, .. }) if title == "Start Aider again?"));
+        tap(&mut pane, KeyCode::Char('y'), t0);
+        assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Renew]);
+        // /help shows the commands and keys; /harness opens the switch.
+        press(&mut pane, "/help", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(&pane.overlay, Some(Overlay::Keys { keys, .. }) if keys.iter().any(|(k, _)| k == "/new")));
+        tap(&mut pane, KeyCode::Esc, t0);
+        press(&mut pane, "/harness", t0);
+        tap(&mut pane, KeyCode::Enter, t0);
+        assert!(matches!(pane.overlay, Some(Overlay::Switch(_))), "the harness switch");
+        tap(&mut pane, KeyCode::Esc, t0);
+        // Text naming none of them goes on to the client as typed; a `/` later in the line is
+        // the client's.
+        press(&mut pane, "/s", t0);
+        assert!(pane.overlay.is_none());
+        assert_eq!(pane.typed, Some(2));
+        press(&mut pane, "can /", t0);
+        assert!(pane.overlay.is_none(), "a slash inside the line goes to the client");
+        // Enter sent the line: the next `/` starts a command again.
+        tap(&mut pane, KeyCode::Enter, t0);
+        press(&mut pane, "/", t0);
+        assert!(matches!(pane.overlay, Some(Overlay::Command { .. })));
+        // Backspace on the `/` alone: no command, and nothing for the client.
+        tap(&mut pane, KeyCode::Backspace, t0);
+        assert!(pane.overlay.is_none());
+        assert_eq!(pane.typed, Some(0));
+        // Esc leaves what was typed to the client, as the chat leaves it in the box.
+        press(&mut pane, "/he", t0);
+        tap(&mut pane, KeyCode::Esc, t0);
+        assert!(pane.overlay.is_none());
+        assert_eq!(pane.typed, Some(3));
+        // Backspace as Windows gives it empties the line again; a key that moves in the line
+        // leaves it unknown, where `/` offers the commands.
+        for _ in 0..3 {
+            pane.key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL), t0);
+        }
+        assert_eq!(pane.typed, Some(0));
+        press(&mut pane, "ab", t0);
+        tap(&mut pane, KeyCode::Left, t0);
+        assert_eq!(pane.typed, None);
+        press(&mut pane, "/", t0);
+        assert!(matches!(pane.overlay, Some(Overlay::Command { .. })));
+        // Lines pasted after a `/` are no command: they go to the client with the `/`.
+        pane.paste("one\ntwo");
+        assert!(pane.overlay.is_none());
+        assert_eq!(pane.typed, Some(7));
+    });
+}
+
+#[test]
+fn the_screen_kits_word_on_its_line_says_where_a_command_starts() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["x".into()]), Theme::new(Depth::True), Masker::default(), 100, 30, t0);
+    pane.phase = PanePhase::Running { since: t0 };
+    // The kit's box holds text (typed before, or an earlier line called back): `/` is the client's.
+    pane.message(pane::Message::Output(0, b"\x1b]7717;line;text\x07".to_vec()), t0);
+    assert_eq!(pane.typed, Some(1));
+    press(&mut pane, "/", t0);
+    assert!(pane.overlay.is_none());
+    // Its box is empty again (sent, cleared, or a fresh one after a turn whose typing it dropped).
+    pane.message(pane::Message::Output(0, b"\x1b]7717;line;empty\x07".to_vec()), t0);
+    press(&mut pane, "/", t0);
+    assert!(matches!(pane.overlay, Some(Overlay::Command { .. })));
+    pane.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), t0);
+    assert!(pane.overlay.is_none());
+    // The word itself draws nothing.
+    assert!(!pane.parser.screen().contents().contains("7717"));
+}
+
+#[test]
+fn a_security_harnesss_name_shows_in_its_own_colours() {
+    let t0 = Instant::now();
+    let theme = Theme::new(Depth::True);
+    let mut spec = pane_spec(vec!["x".into()]);
+    spec.harness = "hexstrike".into();
+    spec.name = "HexStrike".into();
+    let mut pane = Pane::new(spec, theme, Masker::default(), 100, 30, t0);
+    pane.phase = PanePhase::Running { since: t0 };
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buffer = Buffer::empty(area);
+    pane.draw(area, &mut buffer, t0);
+    let header: String = (0..100).map(|x| buffer[(x, 0)].symbol().to_string()).collect();
+    let at = header.find("HexStrike").expect("the name in the header") as u16;
+    let (first, signature) = pane::brand("hexstrike").expect("HexStrike's colours");
+    assert_eq!(buffer[(at, 0)].fg, theme.mix(first, signature, 0.0));
+    assert_eq!(buffer[(at + 8, 0)].fg, theme.mix(first, signature, 1.0));
+    assert!(pane::brand("aider").is_none(), "other harnesses keep the plain bold name");
+}
+
+#[test]
+fn an_ended_client_takes_new_and_exit_from_the_command_line() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["aider".into()]), Theme::new(Depth::True), Masker::default(), 100, 30, t0);
+    pane.phase = PanePhase::Ended { message: "Aider ended.".into(), failed: false };
+    press(&mut pane, "/", t0);
+    let text = pane_text(&mut pane, 100, 30, t0);
+    assert!(text.contains("/exit") && text.contains("quit Yougori"), "{text}");
+    press(&mut pane, "new", t0);
+    tap(&mut pane, KeyCode::Enter, t0);
+    assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Start]);
+    press(&mut pane, "/exit", t0);
+    tap(&mut pane, KeyCode::Enter, t0);
+    assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Quit]);
+    // While it starts, /new waits.
+    pane.phase = PanePhase::Starting { since: t0 };
+    press(&mut pane, "/new", t0);
+    tap(&mut pane, KeyCode::Enter, t0);
+    assert!(pane.effects.is_empty(), "{:?}", pane.effects);
+    assert!(pane_text(&mut pane, 100, 30, t0).contains("Wait until Aider has started to start it again."));
 }

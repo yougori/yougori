@@ -1,18 +1,23 @@
-"""Terminal companion for the official HexStrike MCP server, inside a Sandbox VM."""
+"""Terminal companion for the official HexStrike MCP server, inside a Sandbox VM. It draws in the
+Yougori screen's look (terminal_ui.py)."""
 import argparse
 import asyncio
 import base64
+import contextlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import socket
 import sys
 import time
 import urllib.error
 import urllib.request
+
+from terminal_ui import screen
 
 # Relative to the workspace, where this terminal starts: the session's transcript comes back to
 # the person's folder only after their review.
@@ -118,6 +123,101 @@ def system_message(environment=None):
             words.append("External networking is unavailable.")
     words.append("Never claim a tool ran if it returned an error.")
     return " ".join(words)
+
+
+def reach_words(environment=None):
+    """What this VM reaches, for the banner; empty when it was not passed on."""
+    chosen = reach(environment)
+    if not chosen:
+        return ""
+    mode, sites, targets = chosen
+    if mode == "full":
+        return "the internet"
+    if mode == "targets" and targets:
+        return "the inference and " + ", ".join(targets)
+    if mode in ("targets", "sites") and sites:
+        return "the inference and " + ", ".join(sites) + " over HTTPS"
+    return "only the inference"
+
+
+def call_title(name, arguments, mask=str):
+    """A tool call as its row shows it: the tool, then its first arguments, each cut short."""
+    shown = []
+    for key, value in (arguments.items() if isinstance(arguments, dict) else ()):
+        if value in (None, "", [], {}):
+            continue
+        text = " ".join(mask(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)).split())
+        shown.append(key + "=" + (text if len(text) <= 48 else text[:47] + "…"))
+        if len(shown) == 3:
+            break
+    return "  ".join([name] + shown)
+
+
+def readable(value, prefix=""):
+    """JSON a tool gave as lines to read under its row: `key: value`, a nested key after a dot, a
+    list of plain values on one line (the first eight), a longer or deeper part by its count."""
+    def scalar(item):
+        return item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+
+    def count(number, word):
+        return "%d %s%s" % (number, word, "" if number == 1 else "s")
+    lines = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = prefix + str(key)
+            if key == "success" and item is True:
+                continue  # the row says done
+            if isinstance(item, dict) and item and not prefix:
+                lines += readable(item, name + ".")
+            elif isinstance(item, dict):
+                lines.append("%s: %s" % (name, count(len(item), "field")))
+            elif isinstance(item, list) and all(not isinstance(each, (dict, list)) for each in item):
+                shown = ", ".join(" ".join(scalar(each).split()) for each in item[:8])
+                lines.append("%s: %s%s" % (name, shown, " (+%d more)" % (len(item) - 8) if len(item) > 8 else ""))
+            elif isinstance(item, list):
+                lines.append("%s: %s" % (name, count(len(item), "item")))
+            else:
+                lines.append("%s: %s" % (name, scalar(item)))
+    elif isinstance(value, list):
+        lines.append(count(len(value), "item"))
+        for item in value[:8]:
+            lines.append("- " + (" ".join(scalar(item).split()) if not isinstance(item, (dict, list)) else
+                                 "; ".join(readable(item))))
+    else:
+        lines.append(scalar(value))
+    return lines
+
+
+def result_view(content):
+    """What a tool's result shows under its row, from the result as the terminal keeps it (its JSON,
+    secrets hidden): the output HexStrike's server gave (a command's output, or its message), and
+    whether the tool failed."""
+    try:
+        value = json.loads(content)
+    except ValueError:
+        return False, content
+    failed = isinstance(value, dict) and value.get("isError") is True
+    if isinstance(value, dict) and isinstance(value.get("content"), list):
+        texts = [part.get("text") for part in value["content"] if isinstance(part, dict) and isinstance(part.get("text"), str)]
+        text = "\n".join(texts)
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return failed, text
+    if not isinstance(value, dict):
+        return failed, "\n".join(readable(value))
+    if value.get("success") is False or (value.get("error") and value.get("success") is not True):
+        why = value.get("error") or value.get("stderr") or value.get("message")
+        if isinstance(why, str) and why.strip():
+            return True, why
+        failed = True
+    for key in ("stdout", "output", "result", "response", "message", "content", "data"):
+        found = value.get(key)
+        if isinstance(found, str) and found.strip():
+            return failed, found
+        if isinstance(found, (dict, list)) and found:
+            return failed, "\n".join(readable(found))
+    return failed, "\n".join(readable(value))
 
 
 class Refused(Exception):
@@ -301,7 +401,7 @@ class Transcript:
                 stream.write(self.mask(text))
         except OSError as error:
             self.failed = True
-            print("The session goes on, but its transcript could not be saved: " + str(error), flush=True)
+            screen.warn("The session goes on, but its transcript could not be saved: " + str(error))
 
     def person(self, text):
         self.write("\n## Person\n\n" + text.strip() + "\n")
@@ -319,14 +419,67 @@ class Transcript:
         self.write("\n" + text + "\n")
 
 
+# The keys under the input box.
+KEYS = (("enter", "send"), ("↑↓", "earlier lines"), ("/exit", "leave"))
+
+
+async def take_turn(session, args, messages, tools, names, transcript, mask, start):
+    """One turn: the model answers and its tool calls run, until it answers without one (24 rounds
+    at most). Each answer shows as the screen shows a message, each call on a row of its own."""
+    for _ in range(24):
+        try:
+            with screen.working("Thinking"):
+                reply = await asyncio.to_thread(completion,args.model,messages,tools)
+        except Refused as refusal:
+            # The turn is taken back, so the conversation stays one the model takes.
+            del messages[start:]
+            screen.error("The model could not answer: " + mask(str(refusal)))
+            if transcript: transcript.note("The model could not answer: " + str(refusal))
+            return
+        messages.append(reply)
+        if reply.get("content"):
+            screen.markdown(mask(reply["content"]))
+            if transcript: transcript.reply(reply["content"])
+        calls = reply.get("tool_calls") or []
+        if not calls: return
+        if len(calls)>8: raise ValueError("Too many tool calls in one response.")
+        for call in calls:
+            name = call["function"]["name"]
+            if name not in names: raise ValueError("The model requested a tool it was not offered: " + name[:80])
+            arguments = json.loads(call["function"]["arguments"])
+            with screen.step("Tool", call_title(name, arguments, mask)) as step:
+                result = await asyncio.wait_for(session.call_tool(name,arguments),timeout=120)
+                # Hidden before the cut, so a secret that crosses it leaves no part behind.
+                content = mask(result.model_dump_json())
+                failed, step.output = result_view(content)
+                if failed: step.fail()
+            messages.append({"role":"tool","tool_call_id":call["id"],"content":content[:48000]})
+            if transcript: transcript.tool(name, arguments, content)
+    screen.warn("Stopped after 24 tool rounds. Enter another instruction to continue.")
+    if transcript: transcript.note("Stopped after 24 tool rounds.")
+
+
 async def chat(args):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     source = Path("/opt/solver/source")
-    with (Path.home()/"hexstrike-server.log").open("w") as log, (Path.home()/"hexstrike-mcp.log").open("w") as mcp_log:
+    # --list-tools and --print answer plainly; a session draws the screen.
+    talking = not (args.list_tools or args.prompt)
+    starting = contextlib.ExitStack()
+    with (Path.home()/"hexstrike-server.log").open("w") as log, (Path.home()/"hexstrike-mcp.log").open("w") as mcp_log, starting:
+        if talking:
+            starting.enter_context(screen.working("Starting HexStrike", hint=""))
         # Started in the home folder: the server writes hexstrike.log where it starts, and the
         # workspace holds only what the person reviews.
         server = subprocess.Popen([sys.executable,str(source/"hexstrike_server.py"),"--port","8888"],stdout=log,stderr=log,cwd=Path.home())
+        loop, turn, stoppable = asyncio.get_running_loop(), [None], False
+
+        def stop_turn():
+            # Ctrl+C while a turn runs stops that turn. At the input box Ctrl+C is the box's key.
+            if turn[0] is not None and not turn[0].done():
+                turn[0].cancel()
+            else:
+                raise KeyboardInterrupt
         try:
             for _ in range(60):
                 if server.poll() is not None:
@@ -343,64 +496,90 @@ async def chat(args):
                     await session.initialize()
                     listed = await session.list_tools()
                     tools = offered(listed.tools)
+                    starting.close()
                     names = {tool["function"]["name"] for tool in tools}
                     if args.list_tools:
                         print("\n".join(tool["function"]["name"] for tool in tools)); return
                     if not tools:
                         raise ValueError("This HexStrike lists none of the web-testing tools this terminal offers. Update Yougori.")
                     messages = [{"role":"system","content":system_message()}]
-                    print("HexStrike · Inference Solver · /exit to leave",flush=True)
                     transcript = None if args.prompt else Transcript(Path.cwd()/REPORTS, hidden_values())
                     # A secret a tool echoes (a test login's password) reaches neither the model nor the screen.
                     mask = transcript.mask if transcript else Mask(hidden_values())
-                    if transcript:
-                        print("The session is saved to " + str(REPORTS/transcript.path.name) + " in the workspace.",flush=True)
+                    if talking:
+                        screen.banner("HexStrike", args.model, [
+                            ("Tools", "%d of HexStrike's web-testing tools" % len(tools)),
+                            ("Session", str(REPORTS/transcript.path.name) + " in the workspace"),
+                            ("Reach", reach_words())])
+                        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+                            loop.add_signal_handler(signal.SIGINT, stop_turn)
+                            stoppable = True
                     first = (args.task or "").strip()
                     while True:
                         if first:
                             # The task given at the start is the first turn; the person goes on here.
                             prompt, first = first, ""
-                            print("hexstrike > " + prompt,flush=True)
+                            screen.user(prompt)
                         else:
-                            prompt = args.prompt or await asyncio.to_thread(input,"hexstrike > ")
+                            prompt = args.prompt or await asyncio.to_thread(
+                                screen.ask, "Tell HexStrike what to test next", KEYS, ("/exit", "/quit"), "hexstrike > ", "hexstrike")
                         if prompt.strip() in ("/exit","/quit"): return
+                        if not prompt.strip(): continue
                         if transcript: transcript.person(prompt)
-                        turn = len(messages)
+                        start = len(messages)
                         messages.append({"role":"user","content":prompt})
-                        for _ in range(24):
-                            try:
-                                reply = await asyncio.to_thread(completion,args.model,messages,tools)
-                            except Refused as refusal:
-                                # The turn is taken back, so the conversation stays one the model takes.
-                                del messages[turn:]
-                                print("The model could not answer: " + mask(str(refusal)),flush=True)
-                                if transcript: transcript.note("The model could not answer: " + str(refusal))
-                                break
-                            messages.append(reply)
-                            if reply.get("content"):
-                                print(mask(reply["content"]),flush=True)
-                                if transcript: transcript.reply(reply["content"])
-                            calls = reply.get("tool_calls") or []
-                            if not calls: break
-                            if len(calls)>8: raise ValueError("Too many tool calls in one response.")
-                            for call in calls:
-                                name = call["function"]["name"]
-                                if name not in names: raise ValueError("The model requested a tool it was not offered: " + name[:80])
-                                arguments = json.loads(call["function"]["arguments"])
-                                print("Running " + name,flush=True)
-                                result = await asyncio.wait_for(session.call_tool(name,arguments),timeout=120)
-                                # Hidden before the cut, so a secret that crosses it leaves no part behind.
-                                content = mask(result.model_dump_json())
-                                messages.append({"role":"tool","tool_call_id":call["id"],"content":content[:48000]})
-                                if transcript: transcript.tool(name, arguments, content)
-                        else:
-                            print("Stopped after 24 tool rounds. Enter another instruction to continue.",flush=True)
-                            if transcript: transcript.note("Stopped after 24 tool rounds.")
+                        turn[0] = asyncio.ensure_future(take_turn(session, args, messages, tools, names, transcript, mask, start))
+                        try:
+                            await turn[0]
+                        except asyncio.CancelledError:
+                            # Only the turn was stopped (Ctrl+C); the session itself goes on.
+                            if not turn[0].cancelled() or getattr(asyncio.current_task(), "cancelling", lambda: 0)():
+                                raise
+                            # The stopped turn is taken back, so the conversation stays one the model takes.
+                            del messages[start:]
+                            screen.warn("Stopped. Tell HexStrike what to do next.")
+                            if transcript: transcript.note("Stopped from this terminal.")
+                        finally:
+                            turn[0] = None
                         if args.prompt: return
         finally:
+            if stoppable:
+                with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+                    loop.remove_signal_handler(signal.SIGINT)
             server.terminate()
             try: server.wait(timeout=5)
             except subprocess.TimeoutExpired: server.kill(); server.wait()
+
+
+GROUPS = tuple(kind for kind in (getattr(__import__("builtins"), "BaseExceptionGroup", None),) if kind)
+
+
+def leaves(error):
+    """The exceptions an exception group holds (the MCP client's task group wraps them), or the one."""
+    if GROUPS and isinstance(error, GROUPS):
+        for inner in error.exceptions:
+            yield from leaves(inner)
+    else:
+        yield error
+
+
+def main(argv=None):
+    """The terminal, ended as the person ends it: /exit, Ctrl+C at the input box or Ctrl+D leave
+    quietly; HexStrike's own failures show on the screen."""
+    args = parse(argv)
+    try:
+        with screen.session():
+            asyncio.run(chat(args))
+    except BaseException as error:
+        found = list(leaves(error))
+        if all(isinstance(each, (KeyboardInterrupt, EOFError, asyncio.CancelledError)) for each in found):
+            return 0
+        if all(isinstance(each, (ValueError, OSError, asyncio.TimeoutError, Refused)) for each in found):
+            for each in found:
+                screen.error(str(each) or type(each).__name__)
+            return 1
+        raise
+    return 0
 
 
 def parse(argv=None):
@@ -418,4 +597,4 @@ def parse(argv=None):
 
 
 if __name__ == "__main__":
-    asyncio.run(chat(parse()))
+    sys.exit(main())

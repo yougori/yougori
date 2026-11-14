@@ -156,7 +156,7 @@ pub fn depth_words(depth: &str) -> String {
     }
 }
 
-fn answer_text(value: &serde_json::Value) -> Option<String> {
+pub(super) fn answer_text(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_owned()),
         serde_json::Value::Array(items) => {
