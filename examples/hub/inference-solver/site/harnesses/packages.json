@@ -1,7 +1,7 @@
 {
   "yougori": {
     "kind": "yougori",
-    "version": "1.2.8",
+    "version": "1.2.9",
     "bases": {"postgres": ["plandex", "pentagi"], "chromium": ["shannon", "browseruse", "agenttars", "stagehand"]},
     "memory": {"shannon": 6, "browseruse": 6, "agenttars": 6, "stagehand": 6}
   },

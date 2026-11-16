@@ -478,10 +478,15 @@ def main():
             print(f"{index}. {entry['id']}")
     if args.action == "models":
         return 0
-    if not catalog:
-        raise ValueError("This server has no available models. Connect a model in its Admin page first.")
     model = args.model
-    if not model:
+    if not catalog and holder and not model:
+        # Inside the Yougori harness a session starts with no model yet: its screen lists the
+        # inference's models as they come (the person's own APIs, the computers' models) and the
+        # plans of the harness's client, and starts the harness on the one chosen.
+        model = ""
+    elif not catalog:
+        raise ValueError("This server has no available models. Connect a model in its Admin page first.")
+    elif not model:
         if len(catalog) == 1:
             model = catalog[0]["id"]
         elif sys.stdin.isatty():
@@ -491,7 +496,7 @@ def main():
             model = catalog[choice - 1]["id"]
         else:
             raise ValueError("Select a model with --model.")
-    if model not in {m["id"] for m in catalog}:
+    if model and model not in {m["id"] for m in catalog}:
         raise ValueError(unavailable(model))
     workspace = args.workspace.resolve(strict=True) if args.workspace else None
     if workspace and (not workspace.is_dir() or workspace == Path(workspace.anchor) or "," in str(workspace)):

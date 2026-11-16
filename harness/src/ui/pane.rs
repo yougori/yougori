@@ -446,6 +446,8 @@ pub enum PaneEffect {
     Open(String),
     /// Esc after a sign-in that did not finish: back to the model before it.
     Back,
+    /// /model: read this inference's models afresh.
+    Models,
 }
 
 /// The variable a client that takes an earlier chat reads (Yougori's own: agent_kit.py): the file
@@ -524,6 +526,10 @@ pub struct Pane {
     pub effects: Vec<PaneEffect>,
     pub dirty: bool,
     pub models: Vec<String>,
+    /// The inference's models are being read afresh (/model), and whether the picker opens once
+    /// they come (none were listed).
+    models_reading: bool,
+    models_wanted: bool,
     /// While a model switch is prepared: what the pane goes back to if the new model cannot be
     /// prepared (how it was, or the client's end when the client ended meanwhile).
     pub switch_from: Option<PanePhase>,
@@ -602,6 +608,8 @@ impl Pane {
             effects: Vec::new(),
             dirty: true,
             models,
+            models_reading: false,
+            models_wanted: false,
             switch_from: None,
             change: None,
             change_from: None,
@@ -1117,6 +1125,67 @@ impl Pane {
         }
     }
 
+    fn model_picker(&self) -> Overlay {
+        let choices = self
+            .models
+            .iter()
+            .map(|m| Choice { id: m.clone(), label: m.clone(), hint: String::new(), current: *m == self.spec.model })
+            .collect();
+        Overlay::picker(Which::Models, "Switch model", choices)
+    }
+
+    /// This inference's models, read afresh (or why not): /model lists them, then the plans of
+    /// the client, with the model in use kept. An open model picker shows them, its cursor where
+    /// it was.
+    pub fn models_listed(&mut self, listed: Result<Vec<String>, String>, now: Instant) {
+        self.models_reading = false;
+        self.dirty = true;
+        let wanted = std::mem::take(&mut self.models_wanted);
+        let live = match listed {
+            Ok(live) => live,
+            Err(error) => {
+                if wanted {
+                    self.note = Some((format!("Could not read this inference's models: {}", error.trim()), now));
+                }
+                return;
+            }
+        };
+        let mut next: Vec<String> = Vec::new();
+        for model in live {
+            if !model.trim().is_empty() && !crate::spec::subscribed(&model) && !next.contains(&model) {
+                next.push(model);
+            }
+        }
+        for model in self.spec.models.iter().chain(self.models.iter()) {
+            if crate::spec::subscribed(model) && !next.contains(model) {
+                next.push(model.clone());
+            }
+        }
+        if !self.spec.model.is_empty() && !next.contains(&self.spec.model) {
+            next.insert(0, self.spec.model.clone());
+        }
+        self.models = next;
+        let on = match &self.overlay {
+            Some(Overlay::Picker { which: Which::Models, choices, selected, .. }) => Some(choices.get(*selected).map(|c| c.id.clone())),
+            _ => None,
+        };
+        if !wanted && on.is_none() {
+            return;
+        }
+        if self.models.is_empty() {
+            self.overlay = None;
+            self.note = Some(("This inference lists no models for you yet.".into(), now));
+            return;
+        }
+        let mut picker = self.model_picker();
+        if let (Some(Some(on)), Overlay::Picker { choices, selected, .. }) = (on, &mut picker) {
+            if let Some(at) = choices.iter().position(|choice| choice.id == on) {
+                *selected = at;
+            }
+        }
+        self.overlay = Some(picker);
+    }
+
     /// Runs one of Yougori's commands typed in the pane.
     fn run_command(&mut self, name: &str, argument: &str, now: Instant) {
         match name {
@@ -1218,17 +1287,16 @@ impl Pane {
                 match action {
                     Action::Harness => self.open_harness(None, now),
                     Action::Model => {
-                        let choices = self
-                            .models
-                            .iter()
-                            .map(|m| Choice {
-                                id: m.clone(),
-                                label: m.clone(),
-                                hint: String::new(),
-                                current: *m == self.spec.model,
-                            })
-                            .collect();
-                        self.overlay = Some(Overlay::picker(Which::Models, "Switch model", choices));
+                        // The models are read afresh: the inference may list others by now.
+                        if !self.models_reading {
+                            self.models_reading = true;
+                            self.effects.push(PaneEffect::Models);
+                        }
+                        if self.models.is_empty() {
+                            self.models_wanted = true;
+                        } else {
+                            self.overlay = Some(self.model_picker());
+                        }
                     }
                     Action::SendCtrlP => {
                         if let Some(child) = &self.child {

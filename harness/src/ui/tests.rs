@@ -3,10 +3,10 @@
 //! against the scripted engine, frame sizes, and the terminal pane.
 use super::draw::{self, buffer_text};
 use super::mask::Masker;
-use super::overlay::Overlay;
+use super::overlay::{Overlay, Which};
 use super::pane::{self, Pane, PanePhase};
 use super::screen::Screen;
-use super::state::{App, Effect, Phase, Scroll};
+use super::state::{App, Effect, Phase, Scroll, MODELS_AGAIN};
 use super::theme::{Depth, Theme};
 use crate::protocol::{Command, Event, ToolStatus};
 use crate::spec::EngineSpec;
@@ -494,7 +494,8 @@ fn models_switch_live_or_by_restart_after_confirming() {
     let mut rig = Rig::new(coding_spec());
     rig.ready();
     rig.ctrl('p').press(KeyCode::Enter).press(KeyCode::Down).press(KeyCode::Enter);
-    assert!(rig.effects().is_empty(), "a restart is confirmed first");
+    // Opening the list reads the inference's models afresh.
+    assert_eq!(rig.effects(), [Effect::Models], "a restart is confirmed first");
     rig.press(KeyCode::Enter);
     assert_eq!(rig.effects(), [Effect::Restart("gemma-4-26B-A4B-it".into())]);
     assert!(matches!(rig.app.phase, Phase::Switching { .. }));
@@ -1331,7 +1332,7 @@ fn a_refused_restart_switch_leaves_the_turn_and_its_request_with_the_engine() {
     rig.effects();
     // Ctrl+P, Switch model, the next model, confirm.
     rig.at(3000).ctrl('p').press(KeyCode::Enter).press(KeyCode::Down).press(KeyCode::Enter).press(KeyCode::Enter);
-    assert_eq!(rig.effects(), [Effect::Restart("gemma-4-26B-A4B-it".into())], "nothing is said to the engine yet");
+    assert_eq!(rig.effects(), [Effect::Models, Effect::Restart("gemma-4-26B-A4B-it".into())], "nothing is said to the engine yet");
     assert!(rig.app.turn.is_some() && rig.app.dialogs.len() == 1, "the engine still runs its turn");
     rig.app.switch_refused("gemma-4-26B-A4B-it", "the model left the catalog", rig.now);
     assert_eq!(rig.app.phase, Phase::Ready);
@@ -1579,7 +1580,8 @@ fn a_refused_switch_leaves_a_running_client_its_keys() {
         ] {
             pane.key(key, t0);
         }
-        assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Restart("gpt-oss-20b".into())]);
+        // Opening the list reads the inference's models afresh.
+        assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Models, pane::PaneEffect::Restart("gpt-oss-20b".into())]);
         let t1 = t0 + Duration::from_secs(5);
         pane.switch_preparing("gpt-oss-20b", t1);
         pane.switch_refused("gpt-oss-20b", "no such model", t1);
@@ -1615,7 +1617,7 @@ fn a_model_cannot_be_chosen_while_the_client_starts() {
     pane.phase = PanePhase::Starting { since: t0 };
     pane.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), t0);
     pane.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), t0);
-    assert!(pane.effects.is_empty(), "{:?}", pane.effects);
+    assert_eq!(pane.effects, [pane::PaneEffect::Models], "only the models are read");
     let text = pane_text(&mut pane, 80, 24, t0);
     assert!(text.contains("Wait until Aider has started to switch models."), "{text}");
 }
@@ -2168,7 +2170,8 @@ fn yougoris_commands_are_typed_in_the_terminal_pane() {
         tap(&mut pane, KeyCode::Enter, t0);
         assert!(matches!(&pane.overlay, Some(Overlay::Confirm { title, .. }) if title == "Start Aider again?"));
         tap(&mut pane, KeyCode::Char('y'), t0);
-        assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Renew]);
+        // (/model above read the inference's models afresh.)
+        assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Models, pane::PaneEffect::Renew]);
         // /help shows the commands and keys; /harness opens the switch.
         press(&mut pane, "/help", t0);
         tap(&mut pane, KeyCode::Enter, t0);
@@ -2374,6 +2377,7 @@ fn a_plan_asks_how_to_sign_in_then_sets_it_up_and_restarts() {
     rig.prompt("/model");
     let panel = buffer_text(&rig.buffer(100, 30));
     assert!(panel.contains("Claude plan · sonnet") && panel.contains("your own subscription"), "{panel}");
+    assert_eq!(rig.effects(), [Effect::Models], "/model reads the inference's models afresh");
     rig.press(KeyCode::Esc);
     rig.prompt("/model subscription:claude/sonnet");
     let Some(Overlay::Picker { title, choices, .. }) = &rig.app.overlay else { panic!("the plan's sign-in is asked") };
@@ -2509,4 +2513,142 @@ fn a_sign_in_that_did_not_finish_says_so_in_few_words_and_names_the_plan() {
     assert!(text.contains("The sign-in did not finish."), "{text}");
     assert!(text.contains("back to unsloth/gemma-4-26B-A4B-it-GGUF"), "the way back fits: {text}");
     assert!(text.contains("Claude plan") && !text.contains("subscription:claude"), "{text}");
+}
+
+/// A session whose inference lists no models for the person: OpenCode waits for one.
+fn waiting_spec(models: &[&str]) -> EngineSpec {
+    let mut spec = spec(
+        r#"{"harness":"opencode","name":"OpenCode","category":"coding","protocol":"waiting","cwd":"/workspace","model":"",
+            "model_switch":"restart","respec":["python3","/opt/solver/runtime.py","engine","opencode"],
+            "state_dir":"/home/node/.yougori"}"#,
+    );
+    spec.models = models.iter().map(|model| model.to_string()).collect();
+    spec
+}
+
+const WAITING_READY: &str = r#"{"type":"ready","harness":"opencode","name":"OpenCode","model":"","models":[],"model_switch":"restart","info":"OpenCode starts once you choose a model"}"#;
+
+#[test]
+fn with_no_model_yet_it_says_how_to_get_one_and_sends_nothing() {
+    let mut rig = Rig::new(waiting_spec(&[]));
+    rig.event(WAITING_READY);
+    assert_eq!(rig.app.model, "");
+    assert!(rig.app.models.is_empty(), "no blank model in the list");
+    let text = rig.render(140, 30);
+    assert!(text.contains("OpenCode starts once you choose a model."), "{text}");
+    assert!(text.contains("add your own API under Your APIs"), "{text}");
+    assert!(text.contains("no model yet"), "the model shows as none yet: {text}");
+    rig.effects();
+    // A prompt stays in the box; nothing goes to the engine.
+    rig.at(1000).prompt("hello there");
+    assert!(rig.sent().is_empty());
+    assert_eq!(rig.app.input.text(), "hello there");
+    assert!(rig.app.turn.is_none());
+}
+
+#[test]
+fn with_no_model_yet_the_models_are_read_again_and_choosing_one_starts_the_harness() {
+    let mut rig = Rig::new(waiting_spec(&[]));
+    rig.event(WAITING_READY);
+    rig.effects();
+    // Now and then the inference's models are read again, never twice at once.
+    rig.app.poll_models(rig.now);
+    assert_eq!(rig.effects(), [Effect::Models]);
+    rig.app.poll_models(rig.now + MODELS_AGAIN);
+    assert!(rig.effects().is_empty(), "one read at a time");
+    rig.app.models_listed(Ok(vec![]));
+    rig.app.poll_models(rig.now + MODELS_AGAIN / 2);
+    assert!(rig.effects().is_empty(), "not again so soon");
+    rig.app.poll_models(rig.now + MODELS_AGAIN);
+    assert_eq!(rig.effects(), [Effect::Models]);
+    // One the person added (their own API) comes: they are told.
+    rig.app.models_listed(Ok(vec!["Mine/claude-sonnet-4-5".into()]));
+    assert!(rig.render(140, 30).contains("Mine/claude-sonnet-4-5 can be used now: choose it with /model."));
+    // /model shows it; choosing it starts OpenCode on it, with nothing to confirm.
+    rig.prompt("/model");
+    assert_eq!(rig.effects(), [Effect::Models]);
+    rig.app.models_listed(Ok(vec!["Mine/claude-sonnet-4-5".into()]));
+    assert!(matches!(&rig.app.overlay, Some(Overlay::Picker { which: Which::Models, choices, .. }) if choices.len() == 1));
+    rig.press(KeyCode::Enter);
+    assert_eq!(rig.effects(), [Effect::Restart("Mine/claude-sonnet-4-5".into())]);
+    assert!(matches!(rig.app.phase, Phase::Switching { .. }));
+    // Nothing ran before: the harness has just started on it.
+    let mut next = coding_spec();
+    next.model = "Mine/claude-sonnet-4-5".into();
+    rig.app.switched(next, "Mine/claude-sonnet-4-5", rig.now);
+    let text = rig.render(140, 30);
+    assert!(text.contains("OpenCode started with Mine/claude-sonnet-4-5.") && !text.contains("restarted"), "{text}");
+}
+
+#[test]
+fn model_opens_once_the_models_are_read_when_none_were_listed() {
+    let mut rig = Rig::new(waiting_spec(&[]));
+    rig.event(WAITING_READY);
+    rig.effects();
+    rig.prompt("/model");
+    assert_eq!(rig.effects(), [Effect::Models]);
+    assert!(rig.app.overlay.is_none(), "nothing to show before they are read");
+    // Still none: the person is told where models come from.
+    rig.app.models_listed(Ok(vec![]));
+    assert!(rig.app.overlay.is_none());
+    rig.prompt("/model");
+    rig.app.models_listed(Ok(vec!["gemma-4-26B-A4B-it".into()]));
+    assert!(matches!(&rig.app.overlay, Some(Overlay::Picker { which: Which::Models, .. })), "the picker opens once they come");
+    // A failed read says why when the person asked.
+    rig.press(KeyCode::Esc);
+    let mut rig = Rig::new(waiting_spec(&[]));
+    rig.event(WAITING_READY);
+    rig.prompt("/model");
+    rig.app.models_listed(Err("The inference relay did not answer in time.".into()));
+    assert!(rig.render(140, 30).contains("Could not read this inference's models: The inference relay did not answer in time."));
+}
+
+#[test]
+fn with_no_inference_models_the_plans_of_the_client_are_offered() {
+    let mut spec = waiting_spec(&["subscription:chatgpt/default"]);
+    spec.harness = "codex".into();
+    spec.name = "Codex CLI".into();
+    let mut rig = Rig::new(spec);
+    rig.event(r#"{"type":"ready","harness":"codex","name":"Codex CLI","model":"","models":["subscription:chatgpt/default"],"model_switch":"restart"}"#);
+    let text = rig.render(160, 30);
+    assert!(text.contains("Or use your own ChatGPT plan."), "{text}");
+    // A read keeps the plan beside the inference's models.
+    rig.app.models_listed(Ok(vec!["gemma-4-26B-A4B-it".into()]));
+    assert_eq!(rig.app.models, ["gemma-4-26B-A4B-it", "subscription:chatgpt/default"]);
+}
+
+#[test]
+fn a_model_read_since_the_engine_started_is_switched_to_by_restarting() {
+    // A live engine switches to the models it was set up with ...
+    let mut rig = Rig::new(security_spec());
+    rig.event(r#"{"type":"ready","harness":"strix","name":"Strix","model":"a","models":["a","b"],"model_switch":"live"}"#);
+    rig.prompt("/model b");
+    assert_eq!(rig.sent(), [Command::SetModel { model: "b".into() }]);
+    // ... and restarts, set up afresh, for one the inference listed only later.
+    rig.event(r#"{"type":"model","model":"b"}"#);
+    rig.app.models_listed(Ok(vec!["a".into(), "b".into(), "Mine/new-model".into()]));
+    assert_eq!(rig.app.models, ["a", "b", "Mine/new-model"]);
+    rig.prompt("/model Mine/new-model");
+    assert!(matches!(&rig.app.overlay, Some(Overlay::Confirm { .. })), "a restart is confirmed first");
+    rig.press(KeyCode::Enter);
+    assert_eq!(rig.effects(), [Effect::Restart("Mine/new-model".into())]);
+}
+
+#[test]
+fn the_panes_model_list_is_read_afresh_and_keeps_its_cursor() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["aider".into()]), Theme::new(Depth::True), Masker::default(), 80, 24, t0);
+    pane.phase = PanePhase::Running { since: t0 };
+    press(&mut pane, "/model", t0);
+    tap(&mut pane, KeyCode::Enter, t0);
+    assert_eq!(std::mem::take(&mut pane.effects), [pane::PaneEffect::Models]);
+    pane.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), t0);
+    // A model the person added since (their own API) joins the list; the cursor stays put.
+    pane.models_listed(Ok(vec!["qwen3-coder-30b".into(), "gpt-oss-20b".into(), "Mine/claude-sonnet-4-5".into()]), t0);
+    assert_eq!(pane.models, ["qwen3-coder-30b", "gpt-oss-20b", "Mine/claude-sonnet-4-5"]);
+    let Some(Overlay::Picker { choices, selected, .. }) = &pane.overlay else { panic!("the picker stays open") };
+    assert_eq!((choices.len(), choices[*selected].id.as_str()), (3, "gpt-oss-20b"));
+    // The model in use stays listed, whatever the inference says now.
+    pane.models_listed(Ok(vec!["Mine/claude-sonnet-4-5".into()]), t0);
+    assert_eq!(pane.models, ["qwen3-coder-30b", "Mine/claude-sonnet-4-5"]);
 }

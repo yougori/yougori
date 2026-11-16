@@ -1424,15 +1424,29 @@ fn settle(plan: &mut Plan) -> Result<(), String> {
     Ok(())
 }
 
-/// The model: the one given, or the only one; several without a choice is an error.
-fn pick_model(list: &[String], given: Option<&str>, site: &str) -> Result<String, String> {
+/// The model: the one given, or the only one; several without a choice is an error. None when the
+/// site lists none for the person and none was given: the session starts without one, and the
+/// harness's screen lists the models as they come (the person's own APIs, the inference's) and the
+/// plans of the harness's client.
+fn pick_model(list: &[String], given: Option<&str>, site: &str) -> Result<Option<String>, String> {
     match given {
-        _ if list.is_empty() => Err(format!("{site} has no models for your key yet. Its administrator connects them in Admin.")),
-        Some(model) if list.iter().any(|known| known == model) => Ok(model.to_owned()),
+        None if list.is_empty() => Ok(None),
+        Some(model) if list.is_empty() => {
+            Err(format!("{site} has no model {model} for your key: it lists none for you yet. Leave out --model to start without one."))
+        }
+        Some(model) if list.iter().any(|known| known == model) => Ok(Some(model.to_owned())),
         Some(model) => Err(format!("{site} has no model {model} for your key. It has: {}.", list.join(", "))),
-        None if list.len() == 1 => Ok(list[0].clone()),
+        None if list.len() == 1 => Ok(Some(list[0].clone())),
         None => Err(format!("Choose the model with --model ID. {site} has: {}.", list.join(", "))),
     }
+}
+
+/// What a run without a model says before it starts: the harness starts once one is chosen.
+fn no_model_words(site: &str) -> String {
+    format!(
+        "{site} has no models for your key yet. The session starts without one: add your own API under Your APIs on \
+         {site}, or ask its administrator to connect models in Admin, then choose it with /model."
+    )
 }
 
 /// Whether the full-internet card reaches a target (`host` or `host:port`): Yougori's filter holds
@@ -1606,14 +1620,15 @@ fn secret_variables(plan: &Plan) -> Vec<(String, Zeroizing<String>)> {
 }
 
 /// The launcher's command line for a run: `run yougori` holding the chosen harness, with its
-/// model, the answers file, the folder, the size and the reach. Secrets are never in it.
+/// model (none when the site lists none for the person: the screen waits for one), the answers
+/// file, the folder, the size and the reach. Secrets are never in it.
 fn launch_arguments(plan: &Plan, server: &str, answers: &Path) -> Result<Vec<String>, String> {
     let harness = plan.chosen()?;
-    let model = plan.model.as_deref().ok_or("Choose a model first.")?;
-    let mut arguments: Vec<String> = ["run", YOUGORI, "--server", server, "--harness", &harness.id, "--model", model, "--answers-file"]
-        .map(str::to_owned)
-        .to_vec();
-    arguments.push(answers.display().to_string());
+    let mut arguments: Vec<String> = ["run", YOUGORI, "--server", server, "--harness", &harness.id].map(str::to_owned).to_vec();
+    if let Some(model) = plan.model.as_deref() {
+        arguments.extend(["--model".to_owned(), model.to_owned()]);
+    }
+    arguments.extend(["--answers-file".to_owned(), answers.display().to_string()]);
     if let Some(folder) = folder(plan) {
         arguments.extend(["--workspace".to_owned(), folder.display().to_string()]);
     }
@@ -1693,7 +1708,10 @@ async fn choose_model(plan: &mut Plan, given: Option<&str>, models: &mut Models<
     let id = plan.chosen()?.id.clone();
     let list = models.of(&id).await?;
     if given.is_some() || list.is_empty() {
-        plan.model = Some(pick_model(&list, given, site_name(models.server))?);
+        plan.model = pick_model(&list, given, site_name(models.server))?;
+        if plan.model.is_none() {
+            ui::info(&no_model_words(site_name(models.server)));
+        }
         return Ok(false);
     }
     let choices: Vec<Choice> = list.iter().map(|model| Choice::new(model.clone(), "")).collect();
@@ -2379,7 +2397,10 @@ async fn prepare_run(
         })?;
     } else {
         let list = models.of(&harness.id).await?;
-        plan.model = Some(pick_model(&list, chosen.model.as_deref(), &site)?);
+        plan.model = pick_model(&list, chosen.model.as_deref(), &site)?;
+        if plan.model.is_none() {
+            crate::cli_ui::info(&no_model_words(&site));
+        }
         settle(&mut plan)?;
     }
     // Whatever way the answers came, the run starts only with each one it needs.
@@ -4137,6 +4158,10 @@ mod tests {
         assert_eq!(start_hint(&yougori, false), "prepare the VM and open Yougori in this terminal");
         let arguments = launch_arguments(&plan, "https://argon.yougori.com", Path::new("answers.json")).unwrap();
         assert_eq!(arguments[..8], args(&["run", YOUGORI, "--server", "https://argon.yougori.com", "--harness", YOUGORI, "--model", "m"]));
+        // With no model (the site lists none for the person) the screen waits for one.
+        plan.model = None;
+        let arguments = launch_arguments(&plan, "https://argon.yougori.com", Path::new("answers.json")).unwrap();
+        assert_eq!(arguments[..8], args(&["run", YOUGORI, "--server", "https://argon.yougori.com", "--harness", YOUGORI, "--answers-file", "answers.json"]));
         assert_eq!(answers_json(&plan), json!({}));
         // A harness's own answers are for the harness named: Yougori takes none.
         assert_eq!(plan_for(&yougori, &sets(&[("target", "practice")]), &no_secrets).err().unwrap(), "Yougori asks no questions, so it takes no --set target.");
@@ -4765,11 +4790,14 @@ mod tests {
         assert!(models_reply(br#"{"models":[7]}"#, Some(0), "s").is_err());
         assert!(models_reply(br#"{"models":["a"]}"#, Some(1), "s").is_err());
         let site = "argon.yougori.com";
-        assert_eq!(pick_model(&args(&["only/model"]), None, site), Ok("only/model".into()));
-        assert_eq!(pick_model(&args(&["a/b", "c/d"]), Some("c/d"), site), Ok("c/d".into()));
+        assert_eq!(pick_model(&args(&["only/model"]), None, site), Ok(Some("only/model".into())));
+        assert_eq!(pick_model(&args(&["a/b", "c/d"]), Some("c/d"), site), Ok(Some("c/d".into())));
         assert_eq!(pick_model(&args(&["a/b", "c/d"]), None, site), Err("Choose the model with --model ID. argon.yougori.com has: a/b, c/d.".into()));
         assert_eq!(pick_model(&args(&["a/b"]), Some("z/z"), site), Err("argon.yougori.com has no model z/z for your key. It has: a/b.".into()));
-        assert!(pick_model(&[], None, site).unwrap_err().contains("has no models for your key yet"));
+        // None listed: the session starts without one, unless one was named.
+        assert_eq!(pick_model(&[], None, site), Ok(None));
+        assert!(pick_model(&[], Some("a/b"), site).unwrap_err().contains("it lists none for you yet"));
+        assert!(no_model_words(site).contains("then choose it with /model"));
     }
 
     /// The sign-in words device_login.py prints, as `models --json` passes them on stderr.

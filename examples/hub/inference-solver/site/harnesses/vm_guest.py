@@ -652,7 +652,7 @@ class State:
         harness, mode = data.get("harness"), data.get("mode")
         targets, secrets = data.get("targets", []), data.get("secrets", {})
         if (not isinstance(harness, str) or harness not in self.switchable or mode not in SWITCH_MODES
-                or not bounded(data.get("model"), 1024) or not data.get("model") or not valid_answers(data.get("answers", {}))
+                or not bounded(data.get("model"), 1024) or not valid_answers(data.get("answers", {}))
                 or not isinstance(targets, list) or len(targets) > 64
                 or not all(isinstance(target, str) and TARGET.fullmatch(target) for target in targets)
                 or not valid_secrets(secrets) or (mode == "in-place" and (targets or secrets))
@@ -830,8 +830,10 @@ class State:
             if (not isinstance(arguments, list) or len(arguments) > 256 or
                     any(not isinstance(a, str) or "\0" in a or len(a) > 65536 for a in arguments)):
                 raise ValueError("Invalid harness arguments.")
+            # No model ("") when the inference lists none for the person yet: the screen waits for
+            # one (runtime.py, profiles.waiting).
             model = data.get("model")
-            if not isinstance(model, str) or not 1 <= len(model) <= 1024 or "\0" in model:
+            if not bounded(model, 1024):
                 raise ValueError("Invalid model.")
             kept = kept_setup(data)
             environment = harness_environment(data, model)

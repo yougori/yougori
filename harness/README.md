@@ -50,7 +50,17 @@ VM:   vm_guest.py -> runtime.py run yougori -> profiles.headless() writes engine
               codex-app-server / claude-stream-json / pi-rpc    codex, claude, pi
           terminal pane (src/ui): the harness's own client  strix, shannon, pentagi, pentestgpt,
                                                           hexstrike
+              waiting: no model yet (profiles.waiting)    any harness, until /model chooses one
 ```
+
+When the inference lists no models for the person, `yougori inference run` starts anyway and the
+spec is a waiting one: nothing of the harness runs, the screen keeps prompts back and says where
+models come from (Your APIs on the inference website, the administrator's Admin, the plans of the
+harness's client). /model, in the screen and in the terminal pane, reads the relay's models afresh
+each time it opens; while there is no model the screen reads them every 20 seconds and says when
+one can be used. Choosing one starts the harness on it through the spec's `respec`, as a switch
+that restarts does; a model the inference listed only after an engine started is switched to by
+restarting that engine, set up for the models as they are then.
 
 Security harnesses keep their own engines and their own terminal clients, which run in the
 screen's terminal pane. The Yougori screen frames them (harness, model, what the VM reaches, the

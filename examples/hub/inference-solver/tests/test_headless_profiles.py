@@ -175,6 +175,27 @@ class Headless(unittest.TestCase):
         given = self.spec("opencode", reach={"mode": "full", "sites": [], "targets": []})
         self.assertEqual(given["reach"]["mode"], "full")
 
+    def test_with_no_model_yet_the_screen_waits_and_nothing_of_the_harness_runs(self):
+        # The inference lists no model for the person: each harness's spec waits for one, lists the
+        # plans of its client, and starts the harness through its respec once one is chosen.
+        for harness in EXPECTED:
+            with self.subTest(harness=harness):
+                run = Ran()
+                spec = profiles.headless(harness, "", [], self.home, {"depth": "look"}, cwd=self.work, run=run)
+                json.loads(json.dumps(spec))
+                self.assertEqual((spec["protocol"], spec["model"], spec["model_switch"]), ("waiting", "", "restart"))
+                self.assertEqual(spec["models"], profiles.subscription_models(harness))
+                self.assertEqual(spec["respec"], ["python3", "/opt/solver/runtime.py", "engine", harness])
+                self.assertEqual((spec["argv"], spec["services"], spec["secret_env"]), ([], [], {}))
+                self.assertEqual(spec["answers"], {"depth": "look"})
+                self.assertEqual(spec["env"]["HOME"], str(self.home), "the respec runs in the VM's environment")
+                self.assertEqual(run.calls, [], "no settings are written before a model is chosen")
+        # The models the inference lists by then come first, as the screen offers them.
+        spec = profiles.headless("codex", "", CATALOG, self.home, {}, cwd=self.work)
+        self.assertEqual(spec["models"], ["qwen3-coder", "gemma-4", "subscription:chatgpt/default"])
+        with self.assertRaisesRegex(ValueError, "not-a-harness cannot run in the Yougori harness yet"):
+            profiles.headless("not-a-harness", "", [], self.home, {}, cwd=self.work)
+
     def test_a_harness_without_an_entry_or_a_model_outside_the_catalog_is_refused(self):
         # Every catalogue harness has an entry now (the bridges added aider, interpreter, swe and plandex).
         with self.assertRaisesRegex(ValueError, "not-a-harness cannot run in the Yougori harness yet"):

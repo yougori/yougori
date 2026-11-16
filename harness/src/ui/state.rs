@@ -74,6 +74,8 @@ pub enum Effect {
     Notes { text: String },
     /// Start the engine again, fresh (a new chat for an engine without a /new of its own).
     Renew,
+    /// Read this inference's models afresh (/model, or while there is no model yet).
+    Models,
     /// The person chose a plan (their own subscription) and how to sign in: the launcher opens its
     /// sites and sends the sign-in, then the engine restarts with `model`.
     Subscribe { plan: String, using: String, model: String },
@@ -209,7 +211,19 @@ pub struct App {
     /// The chat this session goes on with is being opened (a /harness switch into a new VM brought
     /// it): prompts wait for it, so that the engine gets it with the first.
     pub resuming: bool,
+    /// The inference's models are being read afresh (each time /model opens, and now and then
+    /// while there is no model yet), when they last were, and whether the model picker opens
+    /// once they come.
+    models_reading: bool,
+    models_read: Option<Instant>,
+    models_wanted: bool,
+    /// The models the running engine was set up with (its Ready): one read since then needs a
+    /// restart to switch to, as the engine does not know it.
+    engine_models: Vec<String>,
 }
+
+/// How often the inference's models are read again while the session has no model yet.
+pub const MODELS_AGAIN: Duration = Duration::from_secs(20);
 
 /// Yougori's own slash commands: name, what it does, what to type after it.
 pub const OWN_COMMANDS: [(&str, &str, Option<&str>); 7] = [
@@ -224,7 +238,7 @@ pub const OWN_COMMANDS: [(&str, &str, Option<&str>); 7] = [
 
 impl App {
     pub fn new(spec: EngineSpec, theme: Theme, masker: Masker, owns_engine: bool, now: Instant) -> App {
-        let models = if spec.models.is_empty() { vec![spec.model.clone()] } else { spec.models.clone() };
+        let models = if spec.models.is_empty() && !spec.model.is_empty() { vec![spec.model.clone()] } else { spec.models.clone() };
         let chat = Chat::new(&spec.harness, &spec.name, &spec.model);
         App {
             chat,
@@ -235,6 +249,10 @@ impl App {
             waiting: None,
             kept: None,
             resuming: false,
+            models_reading: false,
+            models_read: None,
+            models_wanted: false,
+            engine_models: Vec::new(),
             name: spec.name.clone(),
             model: spec.model.clone(),
             model_switch: spec.model_switch,
@@ -367,8 +385,12 @@ impl App {
                 if !ready.models.is_empty() {
                     self.models = ready.models;
                 }
-                if !self.models.contains(&self.model) {
+                if !self.model.is_empty() && !self.models.contains(&self.model) {
                     self.models.insert(0, self.model.clone());
+                }
+                self.engine_models = self.models.clone();
+                if self.model.is_empty() && !self.ready_once {
+                    self.transcript.notice(Level::Info, &self.no_model_words());
                 }
                 self.model_switch = ready.model_switch;
                 self.chat.model = self.model.clone();
@@ -645,6 +667,15 @@ impl App {
     }
 
     pub fn send_prompt(&mut self, text: String, now: Instant) {
+        if self.model.is_empty() {
+            // Nothing runs before a model is chosen: what was typed stays in the box.
+            if self.input.text().trim().is_empty() {
+                self.input.set(&text);
+            }
+            self.transcript.notice(Level::Info, &self.no_model_words());
+            self.dirty = true;
+            return;
+        }
         self.transcript.user(&text);
         self.conversed = true;
         self.turns += 1;
@@ -769,7 +800,7 @@ impl App {
         };
         match name.to_ascii_lowercase().as_str() {
             "harness" => self.open_harness(Some(argument), now),
-            "model" if argument.is_empty() => self.overlay = Some(self.model_picker()),
+            "model" if argument.is_empty() => self.open_models(now),
             "model" => match self.models.iter().find(|model| model.eq_ignore_ascii_case(argument)).cloned() {
                 Some(model) => self.choose_model(model, now),
                 None => self.transcript.notice(Level::Warn, &format!("There is no model {argument} here. /model lists them.")),
@@ -1367,6 +1398,11 @@ impl App {
                 return;
             }
         }
+        // Nothing runs yet (no model): the harness starts on the one chosen.
+        if self.model.is_empty() && self.owns_engine {
+            self.switch_by_restart(model, now);
+            return;
+        }
         if self.stopped() {
             if self.owns_engine {
                 self.switch_by_restart(model, now);
@@ -1375,10 +1411,13 @@ impl App {
             }
             return;
         }
+        // A model the inference added after the engine started is not in its settings: it starts
+        // again, set up with the inference's models as they are now.
+        let live = self.model_switch == ModelSwitch::Live && (self.engine_models.contains(&model) || !self.owns_engine);
         match self.model_switch {
             // The engine answers with a Model event, which says "Now using …".
-            ModelSwitch::Live => self.send(Command::SetModel { model }),
-            ModelSwitch::Restart if self.owns_engine => {
+            _ if live => self.send(Command::SetModel { model }),
+            ModelSwitch::Live | ModelSwitch::Restart if self.owns_engine => {
                 let shown = crate::spec::shown_model(&model);
                 self.overlay = Some(Overlay::Confirm {
                     detail: if self.chat.is_empty() {
@@ -1391,13 +1430,122 @@ impl App {
                     yes: "switch".into(),
                 });
             }
-            ModelSwitch::Restart => {
+            ModelSwitch::Live | ModelSwitch::Restart => {
                 self.transcript.notice(
                     Level::Warn,
                     &format!("{} switches models by restarting, which this screen cannot do here.", self.name),
                 );
             }
         }
+    }
+
+    /// /model: the picker, with this inference's models read afresh (they may have changed since
+    /// the session started: the person's own APIs, the inference's models, the plans). With none
+    /// listed yet it opens once they have been read.
+    pub fn open_models(&mut self, now: Instant) {
+        self.read_models(now);
+        if self.models.is_empty() {
+            self.models_wanted = true;
+        } else {
+            self.overlay = Some(self.model_picker());
+        }
+    }
+
+    fn read_models(&mut self, now: Instant) {
+        if !self.models_reading {
+            self.models_reading = true;
+            self.models_read = Some(now);
+            self.effects.push(Effect::Models);
+        }
+    }
+
+    /// While the session has no model yet, the inference's models are read again now and then,
+    /// and the person is told when one comes.
+    pub fn poll_models(&mut self, now: Instant) {
+        let due = self.models_read.is_none_or(|at| now.saturating_duration_since(at) >= MODELS_AGAIN);
+        if self.model.is_empty() && self.phase == Phase::Ready && self.owns_engine && due {
+            self.read_models(now);
+        }
+    }
+
+    /// This inference's models, read afresh (or why not): /model lists them, then the plans of
+    /// this harness's client, with the model in use kept. An open model picker shows them.
+    pub fn models_listed(&mut self, listed: Result<Vec<String>, String>) {
+        self.models_reading = false;
+        self.dirty = true;
+        let wanted = std::mem::take(&mut self.models_wanted);
+        let live = match listed {
+            Ok(live) => live,
+            Err(error) => {
+                if wanted {
+                    self.transcript.notice(Level::Warn, &format!("Could not read this inference's models: {}", clean(&error).trim()));
+                }
+                return;
+            }
+        };
+        let mut next: Vec<String> = Vec::new();
+        for model in live {
+            if !model.trim().is_empty() && !crate::spec::subscribed(&model) && !next.contains(&model) {
+                next.push(model);
+            }
+        }
+        for model in self.spec.models.iter().chain(self.models.iter()) {
+            if crate::spec::subscribed(model) && !next.contains(model) {
+                next.push(model.clone());
+            }
+        }
+        if !self.model.is_empty() && !next.contains(&self.model) {
+            next.insert(0, self.model.clone());
+        }
+        let added: Vec<String> =
+            next.iter().filter(|model| !self.models.contains(model)).map(|model| crate::spec::shown_model(model)).collect();
+        self.models = next;
+        let picking = matches!(&self.overlay, Some(Overlay::Picker { which: Which::Models, .. }));
+        if wanted || picking {
+            if self.models.is_empty() {
+                self.overlay = None;
+                self.transcript.notice(Level::Info, &self.no_model_words());
+                return;
+            }
+            // The cursor stays on the model it was on.
+            let on = match &self.overlay {
+                Some(Overlay::Picker { which: Which::Models, choices, selected, .. }) => choices.get(*selected).map(|c| c.id.clone()),
+                _ => None,
+            };
+            let mut picker = self.model_picker();
+            if let (Some(on), Overlay::Picker { choices, selected, .. }) = (on, &mut picker) {
+                if let Some(at) = choices.iter().position(|choice| choice.id == on) {
+                    *selected = at;
+                }
+            }
+            self.overlay = Some(picker);
+        } else if self.model.is_empty() && !added.is_empty() {
+            self.transcript.notice(Level::Info, &format!("{} can be used now: choose it with /model.", added.join(", ")));
+        }
+    }
+
+    /// What a session with no model yet says: what starts once one is chosen, and where models
+    /// come from when the inference lists none for the person.
+    pub fn no_model_words(&self) -> String {
+        if self.models.iter().any(|model| !crate::spec::subscribed(model)) {
+            return format!("{} starts once you choose a model: /model lists them.", self.name);
+        }
+        let mut plans: Vec<&str> = Vec::new();
+        for (plan, _) in self.models.iter().filter_map(|model| crate::spec::plan_of(model)) {
+            if !plans.contains(&plan.name) {
+                plans.push(plan.name);
+            }
+        }
+        let mut words = format!(
+            "{} starts once you choose a model. This inference has no models for you yet: add your own API under \
+             Your APIs on its website, or ask its administrator to connect models in Admin.",
+            self.name
+        );
+        if !plans.is_empty() {
+            words.push_str(&format!(" Or use your own {} plan.", plans.join(" or ")));
+        }
+        words.push_str(" /model lists them as they come.");
+        words
     }
 
     /// Starts a switch by restarting. The running turn and its open requests stay with the engine
@@ -1418,7 +1566,7 @@ impl App {
                 self.overlay = None;
                 match action {
                     Action::Harness => self.open_harness(None, now),
-                    Action::Model => self.overlay = Some(self.model_picker()),
+                    Action::Model => self.open_models(now),
                     Action::Mode => self.overlay = Some(self.mode_picker()),
                     Action::Slash(name) => {
                         let text = format!("/{name}");
@@ -1492,6 +1640,8 @@ impl App {
 
     /// The new engine started with the new model; Ready follows from it.
     pub fn switched(&mut self, spec: EngineSpec, model: &str, now: Instant) {
+        // Nothing ran before (no model yet): the harness has just started.
+        let first = self.model.is_empty();
         self.name = spec.name.clone();
         self.model = model.to_owned();
         self.spec = spec;
@@ -1503,7 +1653,9 @@ impl App {
         self.screen_given = false;
         self.chat.model = model.to_owned();
         let shown = crate::spec::shown_model(model);
-        if self.chat.is_empty() {
+        if first {
+            self.transcript.divider(&format!("{} started with {shown}.", self.name));
+        } else if self.chat.is_empty() {
             self.transcript.divider(&format!("{} restarted with {shown}. The conversation starts again.", self.name));
         } else {
             self.transcript.divider(&format!("{} restarted with {shown}. It gets this chat with your next message.", self.name));

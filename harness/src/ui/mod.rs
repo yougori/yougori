@@ -314,6 +314,22 @@ enum Job {
     Noted(Result<String, String>),
     /// A plan the person chose is set up (or why not): the engine restarts with this model.
     Subscribed(String, Result<(), String>),
+    /// This inference's models, read afresh (/model, or while there is no model yet).
+    Models(Result<Vec<String>, String>),
+}
+
+/// This inference's models as the relay lists them now, for the person's key: the inference's
+/// own, the person's own APIs and the computers' models that joined since the session started.
+fn models_job(spec: &EngineSpec) -> LocalBoxFuture<'static, Job> {
+    let (base, key) = (spec.base_url.clone(), spec.api_key.clone());
+    async move { Job::Models(live_models(base, key).await) }.boxed_local()
+}
+
+async fn live_models(base: String, key: String) -> Result<Vec<String>, String> {
+    match crate::native::llm::Llm::new(&base, &key) {
+        Ok(llm) => llm.models().await,
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn subscribe_job(keeper: Arc<Keeper>, plan: String, using: String, model: String) -> LocalBoxFuture<'static, Job> {
@@ -432,6 +448,7 @@ fn agent_job(
         Job::Resumed(chat) => app.resumed(chat, now),
         Job::Noted(notes) => app.noted(notes, now),
         Job::Subscribed(model, outcome) => app.subscribed(model, outcome, now),
+        Job::Models(listed) => app.models_listed(listed),
         // Taken by the run loop before this.
         Job::Changed(_) => {}
     }
@@ -559,6 +576,19 @@ async fn run_agent(
                         let carry = app.carry(&next);
                         return Ok(Ended::SignIn(next.into(), back, Box::new(carry)));
                     }
+                    Job::Respecced(_, Ok(next)) if quitting.is_none() && next.protocol == Protocol::Terminal => {
+                        // The harness runs in the terminal pane (a session that had no model
+                        // yet): the pane takes over, on the model chosen.
+                        app.switch_prepared();
+                        if let Some(mut handle) = engine.take() {
+                            let _ = handle.commands.send(Command::Shutdown);
+                            wait_closed(&mut handle, SWITCH_WAIT).await;
+                        }
+                        app.save_chat();
+                        take_saves(&mut app.effects, &books.saver);
+                        let carry = app.carry(&next);
+                        return Ok(Ended::Switch(Box::new(next), Box::new(carry)));
+                    }
                     Job::Changed(switched) if quitting.is_none() => {
                         switch_cancel = None;
                         switch_progress = None;
@@ -603,6 +633,7 @@ async fn run_agent(
             }
             _ = ticker.tick() => {
                 let now = Instant::now();
+                app.poll_models(now);
                 for panic in Terminal::panics() {
                     app.transcript.notice(Level::Error, &format!("Internal error: {panic}"));
                     app.dirty = true;
@@ -685,6 +716,7 @@ async fn run_agent(
                     Some(model) => side.push(notes_job(&app.spec, model, text)),
                     None => app.noted(Err("no model of this inference can write them".into()), now),
                 },
+                Effect::Models => side.push(models_job(&app.spec)),
                 Effect::Renew => {
                     // The engine starts again, fresh: a new chat for an engine without a /new.
                     if owns && quitting.is_none() {
@@ -785,6 +817,8 @@ enum PaneJob {
     Listed(Result<Listing, String>),
     Opened(Result<Chat, String>),
     Resumed(Result<Chat, String>),
+    /// This inference's models, read afresh (/model).
+    Models(Result<Vec<String>, String>),
 }
 
 /// Starts the spec's client; with a `takeover`, the earlier chat is written for it first.
@@ -951,6 +985,10 @@ async fn run_pane(
                 PaneEffect::History => {
                     let keeper = books.keeper.clone();
                     side.push(async move { PaneJob::Listed(keeper.list().await) }.boxed_local());
+                }
+                PaneEffect::Models => {
+                    let (base, key) = (pane.spec.base_url.clone(), pane.spec.api_key.clone());
+                    side.push(async move { PaneJob::Models(live_models(base, key).await) }.boxed_local());
                 }
                 PaneEffect::Open(id) => {
                     let keeper = books.keeper.clone();
@@ -1167,7 +1205,9 @@ async fn run_pane(
                     }
                     PaneJob::Respecced(model, Err(error)) => pane.switch_refused(&model, &format!("{error:#}"), now),
                     // The chats' jobs run beside these (`side`).
-                    job @ (PaneJob::Listed(_) | PaneJob::Opened(_) | PaneJob::Resumed(_)) => pane_chat_job(&mut pane, job, now),
+                    job @ (PaneJob::Listed(_) | PaneJob::Opened(_) | PaneJob::Resumed(_) | PaneJob::Models(_)) => {
+                        pane_chat_job(&mut pane, job, now)
+                    }
                 }
                 pane.dirty = true;
             }
@@ -1197,6 +1237,7 @@ async fn run_pane(
 fn pane_chat_job(pane: &mut Pane, job: PaneJob, now: Instant) {
     match job {
         PaneJob::Listed(listing) => pane.listed(listing, now),
+        PaneJob::Models(listed) => pane.models_listed(listed, now),
         PaneJob::Opened(chat) => pane.opened(chat, now),
         PaneJob::Resumed(chat) => {
             match chat {

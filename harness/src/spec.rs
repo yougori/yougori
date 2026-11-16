@@ -179,6 +179,7 @@ pub fn shown_model(model: &str) -> String {
     match plan_of(model) {
         Some((plan, "default")) => format!("{} plan", plan.name),
         Some((plan, name)) => format!("{} plan · {name}", plan.name),
+        None if model.is_empty() => "no model yet".into(),
         None => model.to_owned(),
     }
 }
@@ -235,6 +236,9 @@ pub enum Protocol {
     /// The harness's own interactive terminal client (`argv`), shown in a terminal pane inside
     /// the Yougori screen: for harnesses without a headless interface we can drive.
     Terminal,
+    /// No model yet (the inference lists none for the person): nothing runs until the person
+    /// chooses one with /model, which starts the harness on it through `respec`.
+    Waiting,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -375,8 +379,14 @@ impl EngineSpec {
     }
 
     pub fn check(&self) -> anyhow::Result<()> {
-        if self.harness.is_empty() || self.model.is_empty() {
+        if self.harness.is_empty() || (self.model.is_empty() && self.protocol != Protocol::Waiting) {
             anyhow::bail!("The engine spec names no harness or model.");
+        }
+        if self.protocol == Protocol::Waiting {
+            if !self.model.is_empty() || self.respec.is_empty() {
+                anyhow::bail!("A spec waiting for a model has no model yet and a respec to start {} with one.", self.harness);
+            }
+            return Ok(());
         }
         if self.protocol != Protocol::Native && self.argv.is_empty() {
             anyhow::bail!("The engine spec has no command for {}.", self.harness);

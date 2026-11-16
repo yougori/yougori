@@ -147,13 +147,20 @@ class Fixture(unittest.TestCase):
 
 
 class Guest(Fixture):
+    def test_a_session_with_no_model_yet_switches_too(self):
+        # The inference lists no model for the person yet: the next harness waits for one too.
+        self.guest()
+        request = {"harness": "kilo", "model": "", "answers": {}, "mode": "in-place"}
+        identity = self.ask("/switch", request)["id"]
+        self.assertEqual(self.ask("/switch/status", {"id": identity})["state"], "waiting")
+
     def test_only_the_screen_asks_and_one_switch_at_a_time(self):
         self.guest()
         request = {"harness": "kilo", "model": "m", "answers": {}, "mode": "in-place"}
         for token in ("", "wrong"):
             with self.assertRaisesRegex(ValueError, "needs the screen's own request"):
                 self.ask("/switch", request, token)
-        for bad in ({**request, "harness": "aider"}, {**request, "mode": "elsewhere"}, {**request, "model": ""},
+        for bad in ({**request, "harness": "aider"}, {**request, "mode": "elsewhere"}, {**request, "model": "m" * 1025},
                     {**request, "secrets": {"login_password": SECRET}}, {**request, "targets": ["a.example:443"]},
                     {**request, "answers": {"Bad Id": 1}}, {**request, "mode": "new-vm", "targets": ["A B"]}):
             with self.assertRaisesRegex(ValueError, "Invalid harness switch"):

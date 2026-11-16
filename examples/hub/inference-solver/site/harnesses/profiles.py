@@ -1040,6 +1040,23 @@ HEADLESS = {
 }
 
 
+def waiting(harness, catalog, root, answers=None, cwd=None, reach=None):
+    """The engine spec of a session with no model yet (the inference lists none for the person):
+    nothing of `harness` runs. The screen lists this inference's models as they come, and the plans
+    the harness's client signs in to; choosing one starts the harness on it through `respec`, as a
+    switch that restarts does. No settings are written before then."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    return {"harness": harness, "name": NAMES.get(harness, harness),
+            "category": "security" if harness in SECURITY else CATEGORIES.get(harness, "coding"),
+            "protocol": "waiting", "argv": [], "env": environment(root), "secret_env": {}, "cwd": str(cwd or os.getcwd()),
+            "model": "", "models": [item["id"] for item in catalog] + subscription_models(harness),
+            "model_switch": "restart", "respec": RESPEC + [harness], "profile": None, "mcp": [], "services": [],
+            "base_url": BASE, "api_key": LOCAL_KEY, "answers": dict(answers) if isinstance(answers, dict) else {},
+            "reach": reach if isinstance(reach, dict) else reach_of(os.environ.get("SOLVER_REACH")),
+            "state_dir": str(root / ".yougori")}
+
+
 def headless(harness, model, catalog, root, answers=None, cwd=None, reach=None, run=subprocess.run):
     """The engine spec (engine.json) for `harness` on `model`: protocol, command and whole
     environment, this inference's models, the setup answers and reach. Writes the harness's
@@ -1047,6 +1064,8 @@ def headless(harness, model, catalog, root, answers=None, cwd=None, reach=None, 
     entry = HEADLESS.get(harness)
     if entry is None:
         raise ValueError("%s cannot run in the Yougori harness yet: it has no headless profile." % NAMES.get(harness, harness))
+    if not model:
+        return waiting(harness, catalog, root, answers, cwd, reach)
     plan = subscription(model)
     if plan and SUBSCRIPTIONS[plan[0]]["harness"] != harness:
         raise ValueError("Your %s subscription works in %s only." % (SUBSCRIPTIONS[plan[0]]["plan"],

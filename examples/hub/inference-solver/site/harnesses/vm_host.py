@@ -1560,6 +1560,9 @@ RELAY_AT_ONCE = 4
 RELAY_WAITING = 4
 REQUEST_ID = re.compile("[a-f0-9]{32}")
 RELAY_BUSY = "Too many model requests from this VM are under way. Try again shortly."
+NO_MODEL_IMAGE = ("This inference has no models for your key yet, and its harness images cannot start without one. Add your own "
+                  "API under Your APIs on its website, or ask its administrator to connect a model in Admin or to publish the "
+                  "newer harness images.")
 
 
 class Relay:
@@ -1662,7 +1665,8 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
     secret = key_file.read_text().strip()
     # The images can take minutes to arrive, and the harness asks for its model as soon as it
     # starts: a model the website no longer lists is refused here, not in the VM after its pack.
-    if catalog is not None and model not in {entry["id"] for entry in catalog(server, secret)}:
+    # No model ("") starts the screen waiting for one (inside the Yougori harness only).
+    if catalog is not None and model and model not in {entry["id"] for entry in catalog(server, secret)}:
         raise ValueError(unavailable(model))
     print("Starting Yougori Sandbox VM. " + reaches(internet, sites, targets, filtered), flush=True)
     sandbox = None
@@ -1730,7 +1734,10 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                 break
             except Refused:
                 raise
-            except (OSError, ValueError, http.client.HTTPException):
+            except (OSError, ValueError, http.client.HTTPException) as error:
+                if not model and "Invalid model." in str(error):
+                    # An image from before sessions without a model: asking again cannot help.
+                    raise ValueError(NO_MODEL_IMAGE) from None
                 if attempt % 10 == 0:
                     status = call("status")
                     for image in status.get("images", []):

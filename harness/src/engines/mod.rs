@@ -9,11 +9,14 @@ pub mod pi;
 pub mod process;
 pub mod scripted;
 pub mod services;
+pub mod waiting;
 
 /// Starts the spec's services, then its engine. The services stop when the engine ends.
 pub async fn start(spec: &EngineSpec) -> anyhow::Result<EngineHandle> {
     let services = services::start(spec).await?;
     let engine = match spec.protocol {
+        // Nothing of the harness runs before a model is chosen (its spec lists no services).
+        Protocol::Waiting => Ok(waiting::start(spec)),
         Protocol::Native => crate::native::start(spec).await,
         Protocol::Acp => acp::start(spec).await,
         Protocol::CodexAppServer => codex::start(spec).await,
