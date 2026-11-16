@@ -13,7 +13,13 @@ fn catalog() -> Vec<Value> {
 /// A Yougori session that may switch to a few harnesses, as runtime.py writes its spec.
 fn spec() -> EngineSpec {
     let catalog = catalog();
-    let questions = |id: &str| catalog.iter().find(|h| h["id"] == id).map(|h| h["questions"].clone()).unwrap_or(json!([]));
+    // Strix is not offered at present (the Caido proxy it runs needs Caido Labs' permission to be
+    // passed on), but these tests keep it as their security harness, with PentestGPT's questions
+    // (the same as Strix's).
+    let questions = |id: &str| {
+        let id = if id == "strix" { "pentestgpt" } else { id };
+        catalog.iter().find(|h| h["id"] == id).map(|h| h["questions"].clone()).unwrap_or(json!([]))
+    };
     let entry = |id: &str, name: &str, category: &str, base: &str, memory: u32, ready: bool| {
         json!({"id": id, "name": name, "category": category, "description": format!("{name} works here."),
                "questions": questions(id), "base": base, "memory": memory, "ready": ready,
@@ -404,4 +410,20 @@ fn only_the_switch_command_gets_the_switch_token() {
     assert!(!spec.environment().contains_key(SWITCH_TOKEN), "engines never get it");
     let without = switch_command(&spec, "runtime", &[], None);
     assert!(!without.as_std().get_envs().any(|(name, _)| name == SWITCH_TOKEN));
+}
+
+#[test]
+fn every_kind_of_work_but_coding_is_named_in_the_list_and_found_by_its_words() {
+    // Each category of the website's catalogue (site/categories.json) the screen knows by name.
+    let categories: Vec<Value> = serde_json::from_str(include_str!("../../../../examples/hub/inference-solver/site/categories.json")).unwrap();
+    for category in categories.iter().map(|c| c["id"].as_str().unwrap()) {
+        assert_eq!(category_words(category).is_none(), category == "coding", "{category}");
+    }
+    assert_eq!(category_words("agents"), Some("agent framework"));
+    assert_eq!(category_words("something new"), None);
+    // Every catalogue entry is in one of them.
+    for entry in catalog() {
+        let category = entry["category"].as_str().unwrap();
+        assert!(categories.iter().any(|c| c["id"] == category), "{category}");
+    }
 }

@@ -33,10 +33,74 @@ and enum values, which are needed for interoperability):
   2025 Mario Zechner. Used by `src/engines/pi.rs`.
 
 The harnesses these adapters start (OpenCode, Kilo, Gemini CLI, Qwen Code, DeepSeek dsh, Goose,
-OpenHands, Cline, Grok, Codex, Claude Code, Pi) are separate programs installed in the Sandbox VM
-under their own licences; the adapters exchange messages with them over pipes. The five security
-harnesses (Strix, Shannon, PentAGI, PentestGPT, HexStrike) run their own terminal clients in the
-screen's terminal pane (`src/ui/pane.rs`), also as separate programs under their own licences.
+OpenHands, Cline, Grok, Codex, Pi) are separate programs installed in the Sandbox VM under their own
+licences; the adapters exchange messages with them over pipes. The security harnesses (Shannon,
+PentAGI, PentestGPT, HexStrike) run their own terminal clients in the screen's terminal pane
+(`src/ui/pane.rs`), also as separate programs under their own licences.
+
+Two harnesses are not offered, and their packs are not built (`packages.json` "blocked"); the
+adapters and profiles stay for when they can be:
+
+- **Claude Code** is proprietary. Anthropic lets a product preinstall it only once the product's
+  operator has accepted Anthropic's Commercial Terms of Service, the binary is unmodified, and each
+  person signs in with their own credentials (code.claude.com/docs/en/legal-and-compliance).
+- **Strix** (Apache-2.0) runs Caido's proxy (`caido-cli`) and Caido's Python SDK, which come with no
+  licence to pass them on: offering Strix needs Caido Labs' permission.
+
+## Plans (a person's own subscription, `src/spec.rs` PLANS)
+
+- **ChatGPT plan, in Codex:** Codex's own sign-in (`codex login --device-auth`), in the VM. The
+  sign-in may also come from the person's own computer, and Yougori keeps a renewed one for the
+  next session, as OpenAI documents copying Codex's `auth.json` to another machine.
+- **Claude plan, in Claude Code:** only Claude Code's own sign-in, in the VM; Yougori never takes,
+  keeps or passes on a Claude sign-in (Anthropic lets no third party collect, store or intermediate
+  Claude credentials). Claude Code is not offered at present (above), so neither is the plan.
+
+## Yougori's terminal for agent frameworks (examples/hub/inference-solver/site/harnesses: agent_kit.py, kits/)
+
+`agent_kit.py` and the kits are our own files, part of the inference-solver template (MIT). No source
+code, prompt or user-facing text of the frameworks is copied into them: each kit builds its
+framework's agent through the framework's public API, in the framework's own venv inside the Sandbox
+VM, so while it runs the kit and the framework are one program. The frameworks, at the pins in
+`packages.json`: LangGraph, Deep Agents, CrewAI, Microsoft Agent Framework, Vanna, GPT Researcher,
+Open Deep Research, TaskWeaver, PandasAI (its MIT core), GeoAgent, ChemCrow, DeerFlow, OpenManus,
+FinRobot, Browser Use and Stagehand (MIT); smolagents, Strands Agents, Google ADK, PaperQA2,
+TradingAgents, Biomni, CAMEL (Eigent's engine), LiveKit Agents and Agent TARS (Apache-2.0); Pipecat
+(BSD-2-Clause).
+
+- Some of the libraries those processes load are copyleft: PyMuPDF (AGPL-3.0, or Artifex's commercial
+  licence) in GPT Researcher and Open Deep Research; html2text (GPL-3.0-or-later) in PaperQA2, ChemCrow
+  and OpenManus; backtrader (GPL-3.0-or-later) in FinRobot; Unidecode (GPL-2.0-or-later) in ChemCrow.
+  While such a kit runs, it is a program covered by that licence: the kits' MIT licence is compatible
+  with it, every part of that program reaches people as source (Python) or with the address of its
+  complete source (PyMuPDF's compiled MuPDF), and the packs give them under those licences' terms.
+- LiveKit Agents' local models (`livekit-local-inference`) are under LiveKit's model licence, which
+  lets them be passed on and used with LiveKit Agents only, as the LiveKit kit uses them.
+- PandasAI's core imports its `pandasai/ee` folder, which is under PandasAI's Enterprise licence (paid
+  seats for production use). Yougori's PandasAI pack does not carry it: our own stand-in
+  (`licenses/stand-ins/pandasai-ee`, MIT, no PandasAI code) takes its place, and PandasAI runs
+  without its enterprise "skills".
+
+The new terminal clients run as their own programs in the terminal pane: mini-SWE-agent and OpenClaw
+(MIT), HolmesGPT and Continue (Apache-2.0).
+
+## What the VM images pass on (examples/hub/inference-solver/site/harnesses: Containerfile.yougori, pack_licenses.py, licenses/)
+
+- Every base image carries `/usr/share/licenses`: each Debian package's copyright record with the
+  list of packages, versions and source packages (`licenses/debian-licenses.sh`, written before the
+  build removes `/usr/share/doc`), Node.js's licence, this binary's AGPL-3.0 text with the notices of
+  its crates (`licenses/yougori-harness-crates.txt`, from the repository's rendered notices by
+  `scripts/harness-notices.py`), the runtime files' MIT licence, and Yougori's written offer of the
+  complete source of every copyleft part (`licenses/README.txt`).
+- Every pack carries `tool/THIRD-PARTY-LICENSES.txt` (`pack_licenses.py`): each Python distribution,
+  Node package and Go module in it with its licence, its authors and its licence text (the standard
+  text of the licence it declares when it carries none), the release executables' licences and
+  notices (Goose, Grok with Grok Build's third-party notices, Temporal, Typst, Chromium), where the
+  source of each copyleft part is, and the changes Yougori made: Shannon's source changes (AGPL-3.0
+  asks them to be dated), and what was left out because it may not be passed on or carries no licence
+  and is unused (SAP's two packages in Cline, Laminar's closed proxy in OpenHands, `git-python` in
+  Open Interpreter, the WebLINX benchmark and NVIDIA's empty CUDA meta-package in OpenManus). A pack
+  with a package whose licence cannot be named is not built.
 
 ## Coding bridges (examples/hub/inference-solver/site/harnesses/bridges: aider_acp, interpreter_acp, swe_acp, plandex_acp, support_acp)
 

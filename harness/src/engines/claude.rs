@@ -521,7 +521,9 @@ impl Engine {
                 if let Some(session) = message["session_id"].as_str() {
                     self.session = Some(session.to_owned());
                 }
-                if let Some(model) = message["model"].as_str() {
+                // A plan's model keeps the name the screen knows it by (Claude Code names the
+                // model the plan gave it).
+                if let Some(model) = message["model"].as_str().filter(|_| !crate::spec::subscribed(&self.spec.model)) {
                     if model != self.model {
                         self.model = model.to_owned();
                         self.emit(Event::Model { model: model.to_owned() });

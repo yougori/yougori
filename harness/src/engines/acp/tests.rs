@@ -31,6 +31,8 @@ pub(crate) fn spec(dir: &std::path::Path) -> EngineSpec {
         reach: Default::default(),
         state_dir: dir.join("state"),
         session: Default::default(),
+        sign_in: Vec::new(),
+        engine_model: None,
     }
 }
 

@@ -216,6 +216,15 @@ use Yougori's existing publication system, not managed Cloudflare for SaaS.
   are not implemented.
 - Personal API keys stored as hashes, shown once, restricted to specific model names
   or all models; immediate admission refusal after revocation.
+- Your APIs (`site/apis.py`): each member adds their own OpenAI-compatible APIs beside API
+  keys (a name, the HTTPS address, its key and, if they like, the models and the context
+  window; without models, the API's own catalog is read and its chat models taken, at most
+  100). Their models join that member's catalog only, as `NAME/MODEL`, so every harness lists
+  them beside the inference's models; chat, Responses and Messages requests reach them through
+  the same gateway (Claude Code and Codex included). The website keeps the key and never shows
+  it again; a harness VM never sees it. Nothing is charged here (the member's provider bills
+  them); each request is recorded in their usage. The website reaches such an API only at
+  addresses on the public internet, never its own computer or network, at most ten APIs each.
 - Up to ten connected model servers, automatic catalog refresh, and truthful
   unavailable/stale states. This is not a guarantee of ten resident models per GPU.
 - One name per model, however many contributing computers or model servers serve it
@@ -323,6 +332,22 @@ use Yougori's existing publication system, not managed Cloudflare for SaaS.
   cybersecurity harnesses; model refusal behavior still depends on the chosen model. Each
   harness's own page shows its command, what Yougori asks, first-use sign-in, requirements
   and source download.
+- History: every harness's chats are kept on the person's own computer, in the inference's
+  private folder beside the CLI's key (`history/`), never on this website. `/new` starts a
+  new chat and keeps the one before; `/history` reopens any earlier chat, from any harness.
+  A harness that takes a chat over (a `/harness` switch, a model switch that restarts it, a
+  chat reopened) gets the earlier turns with the next prompt, compacted to fit its window by
+  the inference's model. See [the launcher](site/harnesses/README.md#history-and-plans).
+- Plans: Codex can run on the person's own ChatGPT subscription. `/model` lists the plan; the
+  person chooses how to sign in: the sign-in this computer's own Codex holds, the one Yougori
+  kept from an earlier session, or signing in inside the VM with Codex's own sign-in. The VM
+  then reaches that provider's sites alone (through the launcher), beside this website. Yougori
+  keeps a sign-in made or renewed in a VM, and gives a renewed one back to the computer's own
+  Codex while its file is unchanged. A Claude plan would sign in only with Claude Code's own
+  sign-in inside the VM, and stay there; Claude Code is not offered at present.
+- Licences: every harness VM image lists what it carries, under which licence, and where the
+  source of each copyleft part is (`/usr/share/licenses` and each pack's
+  `THIRD-PARTY-LICENSES.txt`). Claude Code and Strix are not offered; see harness/NOTICE.md.
 - Blue terminal presentation and an enforced network boundary. Harnesses run in Yougori
   Sandbox VMs; an owner-only publication and host relay forward only model API requests to
   this website. The real API key stays outside the VM. Workspaces are staged copies. By

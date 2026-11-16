@@ -26,6 +26,7 @@ import protocols
 import google_protocol
 import harness_download
 import routing
+from apis import ApiInput, Apis
 from device_auth import Devices
 from compute import Compute, ComputeInput, MOST_PER_COMPUTER
 from media import Media, MediaInput
@@ -66,6 +67,8 @@ class Service:
         self.store = Store(folder, bootstrap, site_name, journal_mode="DELETE" if hosted else "WAL",
                            runtime_folder=hosted.get("runtime_folder") if hosted else None)
         self.devices = Devices(self.store)
+        # Each person's own model APIs (apis.py), beside this inference's models.
+        self.apis = Apis(self.store)
         self.compute = Compute(self.store)
         # Which connected computer or model server serves each request for a model name.
         self.router = self.compute.router = routing.Router()
@@ -367,13 +370,15 @@ class Handler(BaseHTTPRequestHandler):
                 return google_protocol.complete(self, key, self.body(), *google_route)
             if method == "GET" and path == "/v1/models":
                 models = store.models(key["scopes"])
+                # The person's own APIs' models too (apis.py), as NAME/MODEL.
+                own = [m for m in service.apis.catalog(key["user_id"]) if "*" in key["scopes"] or m["id"] in key["scopes"]]
                 # Each entry names the kind of model, as Yougori's model server does, so a client
                 # reading the catalog knows which take jobs and which answer chat, and the context
                 # its ready servers report (the smallest), so a harness sizes its conversation by it.
                 return self.json(200, {"object": "list", "data": [{"id": m["id"], "object": "model", "owned_by": "inference-solver", "task": m["task"],
                                                                   **({"context_length": m["context_length"]} if "context_length" in m else {}),
                                                                   "capabilities": {"structuredOutput": m["features"]["json"], **({"media": m["task"]} if "media" in m["features"] else {})}}
-                                                                 for m in models if m["state"] == "ready"]})
+                                                                 for m in models if m["state"] == "ready"] + own})
             if service.media.route(self, key, method, path, urlsplit(self.path).query):
                 return
             if method == "POST" and path == "/v1/chat/completions":
@@ -662,6 +667,15 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/admin/compute/disconnect":
             service.compute.revoke(user["id"], self.body().get("id"))
             return self.json(200, {"ok": True})
+        # The person's own model APIs (apis.py): their keys stay here and are never shown again.
+        if method == "GET" and path == "/api/apis":
+            return self.json(200, service.apis.view(user["id"]))
+        if method == "POST" and path == "/api/apis":
+            if not service.throttle("apis:" + user["id"]):
+                return self.error(429, "Too many API changes. Wait one minute.", retry=True)
+            return self.json(201, service.apis.add(user["id"], self.body()))
+        if method == "POST" and path == "/api/apis/remove":
+            return self.json(200, service.apis.remove(user["id"], self.body()))
         if method == "GET" and path == "/api/keys":
             with store.db() as db:
                 rows = db.execute("SELECT id,label,scopes,created,revoked FROM api_keys WHERE user_id=? ORDER BY created DESC", (user["id"],))
@@ -724,7 +738,7 @@ class Handler(BaseHTTPRequestHandler):
             self.dispatch(method)
         except MediaInput as error:
             self.json(error.status, {"error": {"code": error.code, "message": str(error)}})
-        except (AccountError, ChoiceInput, ComputeInput, GridInput, WalletInput, SubscriptionInput) as error:
+        except (AccountError, ChoiceInput, ComputeInput, GridInput, WalletInput, SubscriptionInput, ApiInput) as error:
             self.error(400, str(error))
         except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
             self.error(400, "Check the supplied values and try again.")

@@ -2,6 +2,7 @@
 //! for whichever harness the person chose (our own agent, or another harness's real engine run
 //! headless) and the model they chose from their inference.
 mod engines;
+mod history;
 mod native;
 mod protocol;
 mod spec;
@@ -88,5 +89,7 @@ fn scripted_spec() -> spec::EngineSpec {
         reach: Default::default(),
         state_dir: std::env::temp_dir().join("yougori-harness"),
         session: Default::default(),
+        sign_in: Vec::new(),
+        engine_model: None,
     }
 }

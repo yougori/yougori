@@ -284,17 +284,39 @@ td{padding:16px 12px 16px 0;border-bottom:1px solid var(--line)}
 .column .sort{flex:0 0 auto;margin-left:auto}
 .column .sort select{min-width:150px}
 .column .count{margin:6px 0 10px}
-.column .catalog-note{margin-top:14px}
+:is(.column,.top-harness) .catalog-note{margin-top:14px}
 .column .entries.grid{grid-template-columns:minmax(0,1fr)}
 @container (min-width:560px){.column .entries.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container (min-width:840px){.column .entries.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-/* Models are the same flat cards as the tools; sandboxes' computers are panels already. */
-.column .list{display:grid;gap:8px;border:0}
-.column .list .entry{padding:18px 20px;border:0;background:var(--panel);transition:background-color .2s}
-.column .list .entry:hover{background:var(--chip)}
-.column .list .entry:hover .entry-name{opacity:1}
+/* Models are the same flat cards as Yougori's at the top; sandboxes' computers are panels already. */
+:is(.column,.top-harness) .list{display:grid;gap:8px;border:0}
+:is(.column,.top-harness) .list .entry{padding:18px 20px;border:0;background:var(--panel);transition:background-color .2s}
+:is(.column,.top-harness) .list .entry:hover{background:var(--chip)}
+:is(.column,.top-harness) .list .entry:hover .entry-name{opacity:1}
 .column .grid .entry{padding:18px 20px 16px}
-.column .entry-name{font-size:19px}
+:is(.column,.top-harness) .entry-name{font-size:19px}
+/* Yougori, holding the harnesses, across the top of the main page, above models and sandboxes. */
+.top-harness{margin-bottom:40px}
+/* Yougori's card, compact and set apart in the palette's strong colours (navy, light blue in dark mode):
+   one line says what it is, the next how to install and use it. Only its name and its links open pages,
+   so its Copy button stays usable. */
+.top-harness .list .entry.feature,.top-harness .list .entry.feature:hover{gap:10px;padding:14px 18px;background:var(--pill);color:var(--pill-ink)}
+.feature .entry-open::after{content:none}
+.feature :is(.entry-name,.entry-open,.text-button){color:var(--pill-ink)}
+.feature-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;min-width:0}
+.feature .entry-name{flex:0 0 auto;font-size:19px}
+.feature :is(.entry-text,.entry-meta){margin:0;padding:0;font-size:14px;color:color-mix(in srgb,var(--pill-ink) 74%,transparent)}
+.feature .entry-meta{display:block;margin-left:auto}
+.feature .feature-label{align-self:center;padding:1px 10px;font-size:12px;background:color-mix(in srgb,var(--pill-ink) 16%,transparent);color:var(--pill-ink)}
+.feature-steps{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;margin:0;padding:0;list-style:none;counter-reset:step;font-size:14px}
+.feature-steps li{display:flex;align-items:center;gap:8px;min-width:0;counter-increment:step}
+.feature-steps li:not(.feature-more)::before{content:counter(step);display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:color-mix(in srgb,var(--pill-ink) 16%,transparent);font-size:12px}
+.feature-run{flex:1 1 360px}
+.feature .feature-run .code{flex:1;min-width:0;padding:6px 12px;background:color-mix(in srgb,var(--pill-ink) 12%,transparent);color:var(--pill-ink);font-size:12.5px;white-space:nowrap;overflow-x:auto}
+.feature-copy{flex:0 0 auto;padding:5px 14px;border:0;border-radius:75px;background:var(--pill-ink);color:var(--pill);font-size:13px;font-weight:600;cursor:pointer}
+.feature-copy:hover{opacity:.9}
+.feature-more{margin-left:auto}
+@media (max-width:900px){.feature .entry-meta{margin-left:0}.feature-run{flex-basis:100%}.feature-more{margin-left:0}}
 .column .resource-grid{grid-template-columns:minmax(0,1fr);gap:8px;margin:0}
 .column .empty{padding:40px 20px}
 /* API keys: a dropdown beside the main page's title, in place of a page of its own. */
@@ -310,6 +332,7 @@ td{padding:16px 12px 16px 0;border-bottom:1px solid var(--line)}
 .key-list li>div{min-width:0}
 .key-list strong{display:block;font-weight:450}
 .key-list span{color:var(--muted);font-size:13px}
+.key-list .api-models{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .key-list button{flex:none;white-space:nowrap}
 .keys-panel .code{background:var(--panel)}
 @media (max-width:900px){.keys-panel{left:0;right:auto}}

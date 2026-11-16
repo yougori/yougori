@@ -117,7 +117,10 @@ def session(home=None):
         return {}
     if not isinstance(value, dict) or not isinstance(value.get("harnesses"), list):
         return {}
-    return {name: value[name] for name in ("harnesses", "vm_base", "vm_memory", "server") if name in value}
+    # "resume": the chat a /harness switch into this new VM brought, which the screen opens;
+    # "subscriptions": the plans' sign-ins the person's computer holds, which the screen offers.
+    return {name: value[name] for name in ("harnesses", "vm_base", "vm_memory", "server", "resume", "subscriptions")
+            if name in value}
 
 
 def with_session(spec, home=None):

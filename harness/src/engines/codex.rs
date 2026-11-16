@@ -73,11 +73,15 @@ pub(crate) async fn connect(spec: EngineSpec, transport: Transport) -> anyhow::R
         Err(error) => return Err(failed(&spec, guard.as_ref(), &noise, "initialize", error).await),
     };
     rpc.notify("initialized", Value::Null);
-    let thread = incoming
-        // Asks before every command it does not know to be safe (the "ask" mode); the config
-        // decides the sandbox.
-        .call(&rpc, "thread/start", json!({"cwd": spec.cwd, "model": spec.model, "approvalPolicy": "untrusted"}), START_LIMIT, &mut never)
-        .await;
+    // Asks before every command it does not know to be safe (the "ask" mode); the config decides
+    // the sandbox. A plan's model goes by its name there, or Codex's own default for the plan.
+    let mut start = json!({"cwd": spec.cwd, "approvalPolicy": "untrusted"});
+    match spec.engine_model.as_deref() {
+        Some("") => {}
+        Some(name) => start["model"] = json!(name),
+        None => start["model"] = json!(spec.model),
+    }
+    let thread = incoming.call(&rpc, "thread/start", start, START_LIMIT, &mut never).await;
     let thread = match thread {
         Ok(thread) => thread,
         Err(error) => return Err(failed(&spec, guard.as_ref(), &noise, "start a thread", error).await),

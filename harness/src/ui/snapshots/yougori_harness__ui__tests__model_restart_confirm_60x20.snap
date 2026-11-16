@@ -17,9 +17,9 @@ expression: narrow
 
 
 
+
 ◆  Switch to gemma-4-26B-A4B-it?
-│  Switching to gemma-4-26B-A4B-it restarts OpenCode; this
-│  conversation starts again.
+│  Switching to gemma-4-26B-A4B-it restarts OpenCode.
 └  enter switch · esc cancel
  OpenCode · qwen3-coder-30b · 10% context · Build
 [no cursor]

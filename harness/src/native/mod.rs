@@ -8,13 +8,14 @@
 //! - `permissions`, `profiles` (files with a prompt), `prompt` (the system prompt), `store`
 //!   (sessions in SQLite), `mcp` (an MCP client), `engine` (commands, turns and sessions).
 mod agent;
-mod cancel;
+// The screen's history (crate::history) asks the relay for its notes on an earlier chat.
+pub(crate) mod cancel;
 mod compaction;
 mod conversation;
 mod engine;
 mod events;
 mod html;
-mod llm;
+pub(crate) mod llm;
 mod mcp;
 mod permissions;
 mod profiles;

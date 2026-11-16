@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 167
 expression: wide
 ---
 
@@ -25,9 +24,9 @@ expression: wide
 
  › /harness    switch to another harness · then type name
    /model      switch model · then type id
+   /new        start a new chat (this one is kept)
+   /history    open an earlier chat
    /help       commands and keys
-   /exit       end the session
-   /quit       end the session
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › /                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

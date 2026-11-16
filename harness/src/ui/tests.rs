@@ -1800,7 +1800,8 @@ fn yougori_commands_come_first_and_never_reach_the_engine() {
     rig.ready();
     rig.type_text("/");
     let names: Vec<String> = rig.app.completions().iter().map(|c| c.name.clone()).collect();
-    assert_eq!(names, ["harness", "model", "help", "exit", "quit", "new", "sessions", "compact", "review"]);
+    // The engine's /new is Yougori's own here: it keeps the chat.
+    assert_eq!(names, ["harness", "model", "new", "history", "help", "exit", "quit", "sessions", "compact", "review"]);
     rig.press(KeyCode::Backspace);
     rig.prompt("/harness");
     assert!(matches!(rig.app.overlay, Some(Overlay::Switch(_))));
@@ -1820,12 +1821,197 @@ fn yougori_commands_come_first_and_never_reach_the_engine() {
     rig.press(KeyCode::Esc);
     assert!(rig.sent().is_empty(), "none of these went to the engine");
     assert!(buffer_text(&rig.buffer(100, 30)).contains("There is no model nope here."));
-    // The engine's own commands still go to it, and /exit ends the session.
+    // Nothing said yet: /new has nothing to keep and asks nothing of the engine.
     rig.prompt("/new");
-    assert_eq!(rig.sent(), [Command::Prompt { text: "/new".into() }]);
+    assert!(rig.effects().is_empty());
+    // Once something was said, /new keeps the chat and the engine starts its own new session.
+    rig.prompt("Hello");
+    rig.event(r#"{"type":"message","message":"m1","text":"Hi."}"#).event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    rig.effects();
+    rig.prompt("/new");
+    let effects = rig.effects();
+    assert!(effects.iter().any(|e| matches!(e, Effect::Send(Command::Prompt { text }) if text == "/new")), "{effects:?}");
+    assert!(effects.iter().any(|e| matches!(e, Effect::Save(chat) if chat.title == "Hello" && chat.turns.len() == 2)));
+    assert!(rig.app.chat.is_empty() && rig.app.transcript.is_empty());
+    rig.event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    assert!(rig.effects().is_empty(), "the engine's new session is no chat to save");
+    // The engine's own commands still go to it as typed, and /exit ends the session.
+    rig.prompt("/compact");
+    assert_eq!(rig.sent(), [Command::Prompt { text: "/compact".into() }]);
     rig.event(r#"{"type":"turn_end","reason":"end_turn"}"#);
     rig.prompt("/exit");
     assert!(rig.effects().contains(&Effect::Quit));
+}
+
+#[test]
+fn a_chat_is_kept_and_taken_over_with_its_earlier_turns() {
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    rig.prompt("Fix the parser");
+    assert_eq!(rig.sent(), [Command::Prompt { text: "Fix the parser".into() }], "a new chat goes as typed");
+    rig.event(r#"{"type":"message","message":"m1","text":"Reading it."}"#)
+        .event(r#"{"type":"tool_call","id":"t1","title":"Read src/parser.rs","kind":"read","status":"completed"}"#)
+        .event(r#"{"type":"message","message":"m2","text":"Fixed."}"#)
+        .event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    let saved: Vec<_> = rig.effects().into_iter().filter_map(|e| match e { Effect::Save(chat) => Some(chat), _ => None }).collect();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].turns[1].text, "Reading it.\n\nFixed.");
+    assert_eq!(saved[0].turns[1].tools, ["Read src/parser.rs"]);
+    // The next screen (another harness) takes the chat over: its first prompt carries it.
+    let next = switching_spec();
+    let carry = rig.app.carry(&next);
+    let mut other = Rig::new(next);
+    other.app.carried(carry);
+    other.ready();
+    other.prompt("Now add a test");
+    let sent = other.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: Fix the parser") && text.contains("Reading it.\n\nFixed."), "{text}");
+    assert!(text.ends_with("\n\nNow add a test"), "{text}");
+    // The conversation shows what was typed, and an echo of the whole prompt is not shown again.
+    assert_eq!(other.app.transcript.last_user_text(), Some("Now add a test"));
+    other.event(&serde_json::json!({"type": "user", "text": text}).to_string());
+    assert_eq!(other.app.transcript.last_user_text(), Some("Now add a test"));
+    // From then on the engine has the chat: prompts go as typed.
+    other.event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    other.effects();
+    other.prompt("Thanks");
+    assert_eq!(other.sent(), [Command::Prompt { text: "Thanks".into() }]);
+}
+
+#[test]
+fn history_lists_and_opens_a_chat() {
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    rig.prompt("/history");
+    assert_eq!(rig.effects(), [Effect::History]);
+    let mut kept = crate::history::Chat::new("codex", "Codex", "m");
+    kept.user("Plan the checkout");
+    kept.reply("Here is a plan.", false);
+    let listing = crate::history::Listing { chats: vec![kept.summary()], kept: true };
+    rig.app.listed(Ok(listing));
+    assert!(matches!(&rig.app.overlay, Some(Overlay::Picker { title, .. }) if title == "History"));
+    let panel = buffer_text(&rig.buffer(100, 30));
+    assert!(panel.contains("Plan the checkout") && panel.contains("Codex · 2 messages"), "{panel}");
+    rig.press(KeyCode::Enter);
+    assert_eq!(rig.effects(), [Effect::Open(kept.id.clone())]);
+    rig.app.opened(Ok(kept.clone()), rig.now);
+    let shown = buffer_text(&rig.buffer(100, 30));
+    assert!(shown.contains("Plan the checkout") && shown.contains("Here is a plan."), "{shown}");
+    assert_eq!(rig.app.chat.id, kept.id);
+    // The engine had none of it: nothing restarts, and the next prompt carries it.
+    assert!(rig.effects().is_empty());
+    rig.prompt("Go on");
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: Plan the checkout") && text.ends_with("Go on"), "{text}");
+}
+
+#[test]
+fn the_chat_a_new_vm_goes_on_with_opens_while_the_engine_starts() {
+    let mut kept = crate::history::Chat::new("codex", "Codex", "m");
+    kept.user("Plan the checkout");
+    kept.reply("Here is a plan.", false);
+    // It comes before the engine is ready: it is taken, not refused as another chat would be.
+    let mut rig = Rig::new(switching_spec());
+    rig.app.resuming = true;
+    rig.app.resumed(Ok(kept.clone()), rig.now);
+    assert!(!rig.app.resuming);
+    assert_eq!(rig.app.chat.id, kept.id);
+    let shown = buffer_text(&rig.buffer(100, 30));
+    assert!(shown.contains("Plan the checkout") && shown.contains("Here is a plan."), "{shown}");
+    rig.ready();
+    rig.prompt("Go on");
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: Plan the checkout") && text.ends_with("Go on"), "{text}");
+    // A prompt sent before the chat came waits for it, then carries it.
+    let mut rig = Rig::new(switching_spec());
+    rig.app.resuming = true;
+    rig.ready();
+    rig.prompt("Go on");
+    assert!(rig.sent().is_empty(), "the prompt waits for the chat");
+    rig.prompt("/new");
+    assert!(rig.effects().is_empty(), "no new chat while it opens");
+    rig.app.resumed(Ok(kept.clone()), rig.now);
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: Plan the checkout") && text.ends_with("Go on"), "{text}");
+    // A chat that cannot be opened is said, and the prompt goes as typed.
+    let mut rig = Rig::new(switching_spec());
+    rig.app.resuming = true;
+    rig.ready();
+    rig.prompt("Hello");
+    rig.app.resumed(Err("That chat is not kept on this computer.".into()), rig.now);
+    assert_eq!(rig.sent(), [Command::Prompt { text: "Hello".into() }]);
+    assert!(buffer_text(&rig.buffer(100, 30)).contains("Could not open the chat to go on with"));
+}
+
+#[test]
+fn an_engine_started_again_gets_the_chat_again() {
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    rig.prompt("Fix the parser");
+    rig.event(r#"{"type":"message","message":"m1","text":"Fixed."}"#).event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    rig.effects();
+    // The engine stopped and starts again: the fresh engine gets the chat with the next prompt.
+    rig.app.stop("Codex stopped".into(), "It ended without saying why.".into(), true);
+    rig.app.starting(rig.now);
+    rig.ready();
+    rig.prompt("And the tests?");
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: Fix the parser") && text.contains("Fixed.") && text.ends_with("And the tests?"), "{text}");
+    rig.event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    rig.effects();
+    // So does the one started again after a model that could not start.
+    rig.app.switch_reverted("m2", "it failed", rig.now);
+    rig.ready();
+    rig.prompt("Once more");
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("User: And the tests?") && text.ends_with("Once more"), "{text}");
+}
+
+#[test]
+fn a_long_chat_waits_for_the_models_notes() {
+    let mut spec = switching_spec();
+    spec.context_window = 16_384;
+    let mut rig = Rig::new(spec);
+    rig.ready();
+    let mut long = crate::history::Chat::new("codex", "Codex", "m");
+    for i in 0..60 {
+        long.user(&format!("question {i} {}", "x".repeat(500)));
+        long.reply(&format!("answer {i} {}", "y".repeat(500)), false);
+    }
+    rig.app.opened(Ok(long), rig.now);
+    rig.effects();
+    rig.prompt("And now?");
+    let effects = rig.effects();
+    // The model is asked about the older turns, as much of them as its own window takes.
+    assert!(matches!(&effects[..], [Effect::Notes { text }] if text.contains("answer 2") && text.len() < 32_000), "{effects:?}");
+    assert!(rig.app.busy(), "the turn shows while the notes are written");
+    rig.app.noted(Ok("Asked: sixty questions.".into()), rig.now);
+    let sent = rig.sent();
+    let [Command::Prompt { text }] = &sent[..] else { panic!("{sent:?}") };
+    assert!(text.contains("Notes on the earliest part:\nAsked: sixty questions.") && text.contains("answer 59"), "{text}");
+    assert!(text.ends_with("And now?"));
+    // Esc while the notes are written: the prompt goes back into the box, and nothing is sent.
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    let mut long = crate::history::Chat::new("codex", "Codex", "m");
+    for i in 0..200 {
+        long.user(&format!("question {i} {}", "x".repeat(500)));
+        long.reply("answer", false);
+    }
+    rig.app.opened(Ok(long), rig.now);
+    rig.prompt("Next");
+    assert!(rig.app.waiting.is_some());
+    rig.press(KeyCode::Esc);
+    assert!(rig.app.waiting.is_none() && !rig.app.busy());
+    assert_eq!(rig.app.input.text(), "Next");
+    rig.app.noted(Ok("late".into()), rig.now);
+    assert!(rig.sent().is_empty(), "late notes are dropped");
 }
 
 #[test]
@@ -2090,4 +2276,237 @@ fn an_ended_client_takes_new_and_exit_from_the_command_line() {
     tap(&mut pane, KeyCode::Enter, t0);
     assert!(pane.effects.is_empty(), "{:?}", pane.effects);
     assert!(pane_text(&mut pane, 100, 30, t0).contains("Wait until Aider has started to start it again."));
+}
+
+/// What a pane's client says on its terminal for the history: OSC 7718 with the text in base64.
+fn said(kind: &str, role: Option<&str>, text: &str) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in text.as_bytes().chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                encoded.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    match role {
+        Some(role) => format!("\x1b]7718;{kind};{role};{encoded}\x07"),
+        None => format!("\x1b]7718;{kind};{encoded}\x07"),
+    }
+    .into_bytes()
+}
+
+#[test]
+fn a_pane_keeps_the_chat_its_client_tells() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["x".into()]), Theme::new(Depth::True), Masker::default(), 80, 24, t0);
+    pane.phase = PanePhase::Running { since: t0 };
+    let mut output = said("turn", Some("user"), "Map the shop's API ✓");
+    output.extend(b"working...\r\n");
+    output.extend(said("tool", None, "fetch_url https://shop.test"));
+    output.extend(said("turn", Some("assistant"), "Three endpoints."));
+    pane.message(pane::Message::Output(0, output), t0);
+    assert_eq!(pane.chat.title, "Map the shop's API ✓");
+    assert_eq!(pane.chat.turns.len(), 2);
+    assert_eq!(pane.chat.turns[1].tools, ["fetch_url https://shop.test"]);
+    let saves: Vec<_> = pane.effects.iter().filter(|e| matches!(e, pane::PaneEffect::Save(_))).collect();
+    assert_eq!(saves.len(), 1, "a whole reply saves the chat");
+    assert!(pane_text(&mut pane, 80, 24, t0).contains("working..."), "the codes show nothing");
+    assert_eq!(pane::base64_text(b"bm90IGJhc2U2NA"), Some("not base64".into()));
+    assert_eq!(pane::base64_text(b"%%%"), None);
+}
+
+#[test]
+fn a_pane_keeps_what_a_client_showed_once_the_person_typed() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["x".into()]), Theme::new(Depth::True), Masker::default(), 80, 24, t0);
+    pane.phase = PanePhase::Running { since: t0 };
+    let banner: String = (0..60).map(|i| format!("line {i}\r\n")).collect();
+    pane.message(pane::Message::Output(0, banner.into_bytes()), t0);
+    pane.save_chat();
+    assert!(pane.effects.is_empty(), "nothing typed: no chat to keep");
+    let text = pane.screen_text();
+    assert!(text.starts_with("line 0\nline 1\n") && text.ends_with("line 59"), "every row, scrolled out or not: {text}");
+    // Without a client the pane takes no keys; with one, a line sent makes it a chat.
+    pane.spoke = true;
+    pane.save_chat();
+    let [pane::PaneEffect::Save(chat)] = &pane.effects[..] else { panic!("{:?}", pane.effects) };
+    assert!(chat.screen.contains("line 59") && chat.title == "Aider session");
+    // /history in the pane asks for the list; a chat picked opens.
+    pane.effects.clear();
+    press(&mut pane, "/history", t0);
+    tap(&mut pane, KeyCode::Enter, t0);
+    assert_eq!(pane.effects, [pane::PaneEffect::History]);
+}
+
+/// Claude Code on this inference's model, in a session whose computer holds a Claude sign-in.
+fn claude_spec(home: &std::path::Path) -> EngineSpec {
+    let mut spec = switching_spec();
+    spec.harness = "claude".into();
+    spec.name = "Claude Code".into();
+    spec.protocol = crate::spec::Protocol::ClaudeStreamJson;
+    spec.argv = vec!["claude".into()];
+    spec.model_switch = crate::protocol::ModelSwitch::Live;
+    spec.models = vec![
+        "qwen3-coder-30b".into(),
+        "subscription:claude/default".into(),
+        "subscription:claude/sonnet".into(),
+    ];
+    spec.env.insert("HOME".into(), home.to_string_lossy().into_owned());
+    spec.session.subscriptions.insert("claude".into(), crate::spec::PlanState { saved: false, computer: true });
+    spec.session.harnesses.push(serde_json::from_value(serde_json::json!(
+        {"id": "claude", "name": "Claude Code", "base": "base", "memory": 4, "ready": true})).unwrap());
+    spec
+}
+
+const CLAUDE_READY: &str = r#"{"type":"ready","harness":"claude","name":"Claude Code","model":"qwen3-coder-30b","models":["qwen3-coder-30b","subscription:claude/default","subscription:claude/sonnet"],"model_switch":"live"}"#;
+
+#[test]
+fn a_plan_asks_how_to_sign_in_then_sets_it_up_and_restarts() {
+    let home = tempfile_dir();
+    let mut rig = Rig::new(claude_spec(&home));
+    rig.event(CLAUDE_READY);
+    // The model list names plans plainly.
+    rig.prompt("/model");
+    let panel = buffer_text(&rig.buffer(100, 30));
+    assert!(panel.contains("Claude plan · sonnet") && panel.contains("your own subscription"), "{panel}");
+    rig.press(KeyCode::Esc);
+    rig.prompt("/model subscription:claude/sonnet");
+    let Some(Overlay::Picker { title, choices, .. }) = &rig.app.overlay else { panic!("the plan's sign-in is asked") };
+    assert_eq!(title, "Your Claude plan · the VM reaches anthropic.com, claude.ai, claude.com only");
+    let offered: Vec<&str> = choices.iter().map(|c| c.id.as_str()).collect();
+    // Never this computer's Claude sign-in (Anthropic lets no third party pass Claude credentials
+    // on), however the session says it holds one: Claude Code's own sign-in in the VM.
+    assert_eq!(offered, ["sign-in"], "Claude Code's own sign-in alone");
+    assert!(rig.effects().is_empty(), "nothing happens before the person chooses");
+    let panel = buffer_text(&rig.buffer(140, 30));
+    assert!(panel.contains("it stays in this VM"), "{panel}");
+    rig.press(KeyCode::Enter);
+    assert_eq!(
+        rig.effects(),
+        [Effect::Subscribe { plan: "claude".into(), using: "sign-in".into(), model: "subscription:claude/sonnet".into() }]
+    );
+    assert!(matches!(&rig.app.phase, Phase::Switching { step, .. } if step.contains("anthropic.com")));
+    rig.app.subscribed("subscription:claude/sonnet".into(), Ok(()), rig.now);
+    assert_eq!(rig.effects(), [Effect::Restart("subscription:claude/sonnet".into())]);
+    // A refusal goes back to how it was, in the launcher's words.
+    let mut rig = Rig::new(claude_spec(&home));
+    rig.event(CLAUDE_READY);
+    rig.prompt("/model subscription:claude/default");
+    rig.press(KeyCode::Enter);
+    assert!(matches!(&rig.effects()[..], [Effect::Subscribe { using, .. }] if using == "sign-in"));
+    rig.app.subscribed("subscription:claude/default".into(), Err("This plan is not offered here.".into()), rig.now);
+    assert_eq!(rig.app.phase, Phase::Ready);
+    assert!(buffer_text(&rig.buffer(100, 30)).contains("Could not switch to Claude plan: This plan is not offered here."));
+    // Signed in already in this VM: that comes first.
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::write(home.join(".claude/.credentials.json"), r#"{"claudeAiOauth":{}}"#).unwrap();
+    let mut rig = Rig::new(claude_spec(&home));
+    rig.event(CLAUDE_READY);
+    rig.prompt("/model subscription:claude/sonnet");
+    let Some(Overlay::Picker { choices, .. }) = &rig.app.overlay else { panic!() };
+    assert_eq!(choices.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["vm", "sign-in"]);
+    let _ = std::fs::remove_dir_all(&home);
+    // A ChatGPT sign-in may travel (OpenAI documents copying Codex's auth.json): this computer's,
+    // the one Yougori kept, or Codex's device code sign-in.
+    let home = tempfile_dir();
+    let mut spec = claude_spec(&home);
+    spec.harness = "codex".into();
+    spec.name = "Codex".into();
+    spec.models = vec!["qwen3-coder-30b".into(), "subscription:chatgpt/default".into()];
+    spec.session.subscriptions.insert("chatgpt".into(), crate::spec::PlanState { saved: true, computer: true });
+    let mut rig = Rig::new(spec);
+    rig.event(r#"{"type":"ready","harness":"codex","name":"Codex","model":"qwen3-coder-30b","models":["qwen3-coder-30b","subscription:chatgpt/default"],"model_switch":"restart"}"#);
+    rig.prompt("/model subscription:chatgpt/default");
+    let Some(Overlay::Picker { choices, .. }) = &rig.app.overlay else { panic!("the plan's sign-in is asked") };
+    assert_eq!(choices.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["computer", "saved", "sign-in"]);
+    assert!(choices[2].hint.contains("device code sign-in"), "{}", choices[2].hint);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_plan_belongs_to_its_own_client_and_harnesses_leave_it_on_this_inferences_model() {
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    rig.app.models.push("subscription:claude/sonnet".into());
+    rig.prompt("/model subscription:claude/sonnet");
+    assert!(rig.app.overlay.is_none());
+    assert!(buffer_text(&rig.buffer(100, 30)).contains("Your Claude plan works in Claude Code: /harness claude first."));
+    // On a plan, a switch to another harness takes this inference's model.
+    let home = tempfile_dir();
+    let mut rig = Rig::new(claude_spec(&home));
+    rig.app.model = "subscription:claude/sonnet".into();
+    assert_eq!(rig.app.switch_model(), "qwen3-coder-30b");
+    assert_eq!(crate::spec::shown_model("subscription:chatgpt/default"), "ChatGPT plan");
+    assert_eq!(crate::spec::shown_model("qwen3-coder-30b"), "qwen3-coder-30b");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_sign_in_pane_goes_back_and_keeps_no_chat_of_its_own() {
+    let t0 = Instant::now();
+    let mut pane = Pane::new(pane_spec(vec!["x".into()]), Theme::new(Depth::True), Masker::default(), 80, 24, t0);
+    pane.signing = true;
+    pane.back = Some("qwen3-coder-30b".into());
+    pane.phase = PanePhase::Ended { message: "Claude Code ended with exit code 1.".into(), failed: true };
+    let status = pane_text(&mut pane, 100, 30, t0);
+    assert!(status.contains("sign in again") && status.contains("back to qwen3-coder-30b"), "{status}");
+    pane.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), t0);
+    assert_eq!(pane.effects, [pane::PaneEffect::Back]);
+    pane.effects.clear();
+    pane.spoke = true;
+    pane.save_chat();
+    assert!(pane.effects.is_empty(), "a sign-in is no chat");
+    // `/` is the client's while it signs in.
+    pane.phase = PanePhase::Running { since: t0 };
+    pane.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE), t0);
+    assert!(pane.overlay.is_none());
+}
+
+fn tempfile_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("yougori-plan-{}", crate::history::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_engines_word_on_a_new_session_yougori_asked_for_is_not_shown() {
+    let mut rig = Rig::new(switching_spec());
+    rig.ready();
+    rig.prompt("Hello");
+    rig.event(r#"{"type":"message","message":"m1","text":"Hi."}"#).event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    rig.prompt("/new");
+    rig.event(r#"{"type":"notice","level":"info","text":"Started a new session."}"#)
+        .event(r#"{"type":"turn_end","reason":"end_turn"}"#);
+    assert!(!buffer_text(&rig.buffer(100, 30)).contains("Started a new session."));
+    // The engine's own /new typed as an engine command elsewhere still shows what it says.
+    rig.event(r#"{"type":"notice","level":"info","text":"Something else."}"#);
+    assert!(buffer_text(&rig.buffer(100, 30)).contains("Something else."));
+}
+
+#[test]
+fn a_sign_in_that_did_not_finish_says_so_in_few_words_and_names_the_plan() {
+    let t0 = Instant::now();
+    let mut spec = pane_spec(vec!["x".into()]);
+    spec.name = "Claude Code · signing in to your Claude plan".into();
+    spec.model = "subscription:claude/default".into();
+    let mut pane = Pane::new(spec, Theme::new(Depth::True), Masker::default(), 140, 24, t0);
+    pane.signing = true;
+    pane.back = Some("unsloth/gemma-4-26B-A4B-it-GGUF".into());
+    pane.generation = 1;
+    pane.phase = PanePhase::Running { since: t0 };
+    let status = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+        .args(if cfg!(windows) { ["/C", "exit 130"] } else { ["-c", "exit 130"] })
+        .status()
+        .map(|s| portable_pty::ExitStatus::with_exit_code(s.code().unwrap_or(130) as u32))
+        .unwrap();
+    pane.message(pane::Message::Exited(1, Ok(status)), t0);
+    let text = pane_text(&mut pane, 140, 24, t0);
+    assert!(text.contains("The sign-in did not finish."), "{text}");
+    assert!(text.contains("back to unsloth/gemma-4-26B-A4B-it-GGUF"), "the way back fits: {text}");
+    assert!(text.contains("Claude plan") && !text.contains("subscription:claude"), "{text}");
 }

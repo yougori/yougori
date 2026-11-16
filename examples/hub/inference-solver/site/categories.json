@@ -1,4 +1,12 @@
 [
   {"id": "coding", "label": "Coding", "color": "#2563eb"},
-  {"id": "security", "label": "Cyber Coding", "color": "#087ca7"}
+  {"id": "agents", "label": "Agent frameworks", "color": "#4338ca"},
+  {"id": "security", "label": "Cyber Coding", "color": "#087ca7"},
+  {"id": "operations", "label": "IT operations", "color": "#0f766e"},
+  {"id": "data", "label": "Data analysis", "color": "#1d4ed8"},
+  {"id": "research", "label": "Research", "color": "#6d28d9"},
+  {"id": "office", "label": "Office and browser", "color": "#0369a1"},
+  {"id": "service", "label": "Customer service", "color": "#155e75"},
+  {"id": "finance", "label": "Finance", "color": "#047857"},
+  {"id": "science", "label": "Science", "color": "#7c3aed"}
 ]

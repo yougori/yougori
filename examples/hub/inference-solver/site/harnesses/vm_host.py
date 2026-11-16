@@ -334,6 +334,12 @@ def install_yougori(held, server, root):
     return identity, declaration, pack["memory"]
 
 
+# The website's categories (site/categories.json): an entry's "kind", which the screen names in its
+# harness list (any other is coding). Its "category" stays security or coding, which every VM's
+# guest and screen take, those from before the kinds included.
+CATEGORIES = ("coding", "agents", "security", "operations", "data", "research", "office", "service", "finance", "science")
+
+
 def switch_list(server, held, memory, known, opener=None):
     """What a Yougori harness session gets at /start to switch harness from its screen (/harness):
     the website's harnesses (GET /api/harnesses) that it offers, that start inside the Yougori
@@ -363,6 +369,7 @@ def switch_list(server, held, memory, known, opener=None):
         reason = item["held"].get("reason")
         entries.append({"id": item["id"], "name": plain(item.get("name") or item["id"], 80),
                         "category": "security" if item.get("category") == "security" else "coding",
+                        "kind": item["category"] if item.get("category") in CATEGORIES else "coding",
                         "description": plain(item.get("description") or "", 600) if isinstance(item.get("description"), str) else "",
                         "questions": questions[:32], "base": pack["base"], "memory": pack["memory"],
                         "ready": item["held"].get("available") is True,
@@ -480,14 +487,17 @@ def run_session(name, server, key_file, model, workspace, interactive=True, cpu=
     already held, the person confirms them here, on their own terminal, never in the VM. A coding
     harness keeps the run's reach. The review lines of every VM come at the end. The exit code."""
     reviews, held, chosen = [], set(targets or []), memory
+    resume = None
     try:
         while True:
             result = launch(name, server, key_file, model, workspace, [], interactive, cpu=cpu, memory=memory,
                             internet=internet, sites=sites, targets=targets, harness=name, answers=answers, secrets=secrets,
-                            images=images, catalog=catalog, known=known, reviews=reviews)
+                            images=images, catalog=catalog, known=known, reviews=reviews, resume=resume)
             if not isinstance(result, Relaunch):
                 return result
             request = result.request
+            # The chat the screen was in goes on in the next VM.
+            resume = request.get("chat") if isinstance(request.get("chat"), str) and CHAT_ID.fullmatch(request["chat"]) else None
             label, wanted = request["name"], [t for t in request.get("targets") or [] if isinstance(t, str)]
             if request["category"] == "security":
                 wider = [target for target in wanted if target not in held]
@@ -1250,6 +1260,232 @@ def reach(internet=False, sites=None, targets=None):
     return {"mode": mode, "sites": list(sites or []), "targets": list(targets or [])}
 
 
+# The person's chats (the Yougori harness's /history, harness/src/history.rs): kept here, in the
+# inference's private folder (the key's), one file each and a list of them (index.json), which a
+# session's VM gets once it starts. The VM hands each chat over as the screen saves it (/poll
+# "history"), and asks for one the screen opens (/poll "history_open", answered with /history/body).
+HISTORY_FOLDER = "history"
+CHAT_ID = re.compile("[a-f0-9]{32}")
+CHAT_BYTES = 2 * 1024 * 1024
+HISTORY_LISTED = 2000
+
+
+def valid_chat(chat):
+    """A chat as the screen saves it (vm_guest.valid_chat)."""
+    if not isinstance(chat, dict) or not isinstance(chat.get("id"), str) or not CHAT_ID.fullmatch(chat["id"]):
+        return False
+    try:
+        size = len(json.dumps(chat))
+    except (TypeError, ValueError):
+        return False
+    turns = chat.get("turns", [])
+    return (size <= CHAT_BYTES and isinstance(chat.get("title", ""), str) and len(chat.get("title", "")) <= 400
+            and isinstance(turns, list) and len(turns) <= 5000
+            and all(isinstance(turn, dict) and turn.get("role") in ("user", "assistant") and isinstance(turn.get("text", ""), str)
+                    for turn in turns)
+            and type(chat.get("updated", 0)) is int and type(chat.get("version", 0)) is int)
+
+
+def chat_summary(chat):
+    """A chat as /history lists it (vm_guest.chat_summary)."""
+    names = [plain(name, 80) for name in chat.get("harnesses") or [] if isinstance(name, str)][:32]
+    return {"id": chat["id"], "title": plain(chat.get("title") or "", 400), "updated": chat.get("updated", 0),
+            "name": plain(chat["name"], 80) if isinstance(chat.get("name"), str) else "", "harnesses": names,
+            "model": plain(chat["model"], 1024) if isinstance(chat.get("model"), str) else "",
+            "turns": len(chat.get("turns") or [])}
+
+
+def read_chat(path):
+    """A kept chat's file, or None."""
+    try:
+        if path.stat().st_size > CHAT_BYTES + 1024:
+            return None
+        chat = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return chat if valid_chat(chat) and chat["id"] == path.stem else None
+
+
+def write_kept(path, text):
+    """Writes a history file whole or not at all."""
+    partial = path.with_name("." + path.name + ".partial")
+    with open(partial, "w", encoding="utf-8", newline="") as stream:
+        stream.write(text)
+    os.replace(partial, path)
+
+
+def history_index(root):
+    """The chats kept for this inference, newest first, as /history lists them; rebuilt from the
+    chats themselves when the list is missing or damaged."""
+    folder = Path(root) / HISTORY_FOLDER
+    try:
+        index = json.loads((folder / "index.json").read_text(encoding="utf-8"))
+        if isinstance(index, list) and all(isinstance(item, dict) and isinstance(item.get("id"), str)
+                                           and CHAT_ID.fullmatch(item["id"]) for item in index):
+            return index[:HISTORY_LISTED]
+    except (OSError, ValueError):
+        pass
+    found = []
+    for path in sorted(folder.glob("*.json"))[:10000] if folder.is_dir() else []:
+        chat = read_chat(path) if CHAT_ID.fullmatch(path.stem) else None
+        if chat:
+            found.append(chat_summary(chat))
+    found.sort(key=lambda item: item.get("updated", 0), reverse=True)
+    return found[:HISTORY_LISTED]
+
+
+def keep_chat(root, chat):
+    """Keeps a chat the VM handed over (its newest version wins) and lists it first. Whether it was
+    kept."""
+    if not valid_chat(chat):
+        return False
+    folder = Path(root) / HISTORY_FOLDER
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = folder / (chat["id"] + ".json")
+    known = read_chat(path)
+    if known is not None and known.get("version", 0) > chat.get("version", 0):
+        return False
+    index = [item for item in history_index(root) if item["id"] != chat["id"]]
+    write_kept(path, json.dumps(chat))
+    index.insert(0, chat_summary(chat))
+    index.sort(key=lambda item: item.get("updated", 0), reverse=True)
+    write_kept(folder / "index.json", json.dumps(index[:HISTORY_LISTED]))
+    return True
+
+
+def answer_open(control, root, identity, done):
+    """Gives the VM the chat its screen opened, or says there is none."""
+    chat = read_chat(Path(root) / HISTORY_FOLDER / (identity + ".json")) if CHAT_ID.fullmatch(identity) else None
+    try:
+        again(control.post, "/history/body", {"id": identity, "chat": chat} if chat else {"id": identity, "missing": True}, done)
+    except (OSError, ValueError, http.client.HTTPException):
+        pass
+
+
+# A person's own plans (profiles.SUBSCRIPTIONS): the sites each plan's client reaches, decided here
+# and never by the VM, and, for a plan whose sign-in may travel (TRANSFERABLE: ChatGPT), where it is:
+# this computer's own Codex's auth.json, and Yougori's copy of one made or renewed in a VM, kept in
+# the inference's private folder beside its chats (subscriptions/PLAN.json).
+SUBSCRIPTION_SITES = {"claude": ["anthropic.com", "claude.ai", "claude.com"], "chatgpt": ["chatgpt.com", "openai.com"]}
+SUBSCRIPTION_USES = ("vm", "saved", "computer", "sign-in")
+CREDENTIAL_BYTES = 64 * 1024
+# The plans whose sign-in this launcher may read, keep and give back: ChatGPT's (OpenAI documents
+# copying Codex's auth.json to another machine). Anthropic lets no third party collect, store or
+# pass on Claude credentials, so this launcher never touches Claude Code's sign-in: a Claude plan
+# signs in with Claude Code's own sign-in inside the VM.
+TRANSFERABLE = ("chatgpt",)
+
+
+def computer_credential(plan):
+    """Where this computer's own client keeps the plan's sign-in: Codex's, for the ChatGPT plan
+    (the only one whose sign-in may travel)."""
+    if plan not in TRANSFERABLE:
+        raise ValueError("This plan's sign-in stays in its client.")
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json"
+
+
+def kept_credential(root, plan):
+    """Yougori's copy of the plan's sign-in, made or renewed in a VM: in the inference's private
+    folder (the one above the Yougori harness's, which holds the key and the chats)."""
+    return Path(root).parent / "subscriptions" / (plan + ".json")
+
+
+def credential_text(path):
+    """A sign-in file's text when it holds one (a JSON object of at most CREDENTIAL_BYTES), else None."""
+    try:
+        if path.stat().st_size > CREDENTIAL_BYTES:
+            return None
+        text = path.read_text(encoding="utf-8")
+        return text if isinstance(json.loads(text), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def subscriptions_state(root):
+    """What the screen offers for each plan whose sign-in may travel (TRANSFERABLE): whether Yougori
+    kept a sign-in, and whether this computer's own client holds one. Nothing of either goes into
+    the VM until the person chooses."""
+    return {plan: {"saved": credential_text(kept_credential(root, plan)) is not None,
+                   "computer": credential_text(computer_credential(plan)) is not None} for plan in TRANSFERABLE}
+
+
+def write_whole(path, text):
+    """Writes `path` whole or not at all, readable by this user alone where the system says so."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    partial = path.with_name("." + path.name + ".yougori-partial")
+    descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+        stream.write(text)
+    os.replace(partial, path)
+
+
+class Plans:
+    """The session's plans: the sign-in each one took from this computer, so that a sign-in the
+    client renews in the VM goes back there while this computer's file is still as it was given,
+    and both stay signed in."""
+
+    def __init__(self, root):
+        self.root = root
+        self.computer = {}
+
+    def grant(self, control, request, tunnels):
+        """A plan the screen chose (/poll "subscription"): its sites opened, and the sign-in to use
+        sent with them. The session's tunnels, made now when it chose no sites."""
+        identity, plan, use = request.get("id"), request.get("plan"), request.get("use")
+
+        def fail(reason):
+            try:
+                control.post("/subscription/failed", {"id": identity, "reason": reason})
+            except (OSError, ValueError, http.client.HTTPException):
+                pass
+            return tunnels
+        if not isinstance(identity, str) or plan not in SUBSCRIPTION_SITES or use not in SUBSCRIPTION_USES:
+            return fail("This plan is not offered here.")
+        if plan not in TRANSFERABLE and use in ("saved", "computer"):
+            return fail("A Claude sign-in completes in Claude Code's own sign-in, in the VM: choose Sign in.")
+        given = None
+        if use == "saved":
+            given = credential_text(kept_credential(self.root, plan))
+            if given is None:
+                return fail("Yougori no longer keeps a sign-in for this plan. Sign in instead.")
+        elif use == "computer":
+            given = credential_text(computer_credential(plan))
+            if given is None:
+                return fail("This computer no longer holds a sign-in for this plan. Sign in instead.")
+            self.computer[plan] = hashlib.sha256(given.encode()).hexdigest()
+        sites = SUBSCRIPTION_SITES[plan]
+        if tunnels is None:
+            tunnels = vm_tunnel.HostTunnels(lambda message: control.post("/tunnel", message), list(sites))
+        else:
+            tunnels.sites.extend(site for site in sites if site not in tunnels.sites)
+        try:
+            control.post("/subscription/granted", {"id": identity, "sites": sites, **({"credential": given} if given else {})})
+        except (OSError, ValueError, http.client.HTTPException):
+            pass
+        return tunnels
+
+    def keep(self, signed):
+        """Sign-ins a client made or renewed in the VM: Yougori keeps each for the next session, and
+        one this computer gave goes back to it too, unless the computer's own changed meanwhile."""
+        for item in signed if isinstance(signed, list) else []:
+            plan, text = (item.get("plan"), item.get("text")) if isinstance(item, dict) else (None, None)
+            # Never a Claude sign-in, whatever the VM sends.
+            if plan not in TRANSFERABLE or not isinstance(text, str) or len(text) > CREDENTIAL_BYTES:
+                continue
+            try:
+                if not isinstance(json.loads(text), dict):
+                    continue
+                write_whole(kept_credential(self.root, plan), text)
+                if plan in self.computer:
+                    path = computer_credential(plan)
+                    now = credential_text(path)
+                    if now is not None and hashlib.sha256(now.encode()).hexdigest() == self.computer[plan]:
+                        write_whole(path, text)
+                        self.computer[plan] = hashlib.sha256(text.encode()).hexdigest()
+            except (OSError, ValueError):
+                continue
+
+
 def session(harness, answers, secrets, internet=False, sites=None, targets=None):
     """The /start fields of a Yougori harness session: the harness it holds, the setup answers,
     the secret answers (only ever in this request and the harness's environment) and the reach."""
@@ -1380,7 +1616,7 @@ class Relay:
 
 def launch(name, server, key_file, model, workspace, arguments, interactive=True, cpu=None, memory=None, internet=False,
            sites=None, targets=None, harness=None, answers=None, secrets=None, images=None, catalog=None, known=None,
-           reviews=None):
+           reviews=None, resume=None):
     """Starts `name`'s VM image and its harness in this terminal. With `harness` (the Yougori
     harness, holding `name`), the VM starts on the Yougori harness's base with that harness's pack
     (both kept in `images`, the folder every harness Yougori holds shares; by default the key's)
@@ -1435,6 +1671,7 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
     keys = None
     tunnels = None
     screen = None
+    plans = None
     ended = False
     started = False
     keyboard = Keyboard()
@@ -1484,6 +1721,11 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                     body["targets"] = targets
                 if fields:
                     body.update(fields)
+                    # The person's chats are kept here; the session goes on with `resume` when a
+                    # switch into this new VM brought one.
+                    body["history"] = {"resume": resume} if isinstance(resume, str) and CHAT_ID.fullmatch(resume) else {}
+                    # Which plans' sign-ins this computer holds, for the screen to offer.
+                    body["subscriptions"] = subscriptions_state(root)
                 started = control.post("/start", body)
                 break
             except Refused:
@@ -1500,6 +1742,11 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
         if not started:
             raise ValueError("The VM harness service did not start.")
         held(started, fields)
+        if fields:
+            try:
+                control.post("/history/index", {"index": history_index(root)})
+            except (OSError, ValueError, http.client.HTTPException):
+                pass  # An image from before the history: its chats stay in the VM.
         if sites:
             # An image from before chosen sites starts without its proxy: stop rather than run
             # a session that cannot reach what was chosen.
@@ -1513,6 +1760,7 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                 raise ValueError("This harness's VM image cannot combine chosen sites with targets yet. Ask the "
                                  "administrator to publish a newer image, or choose the targets alone.")
         relay = Relay(control, server, secret, done)
+        plans = Plans(root)
         if interactive and sys.stdin.isatty():
             if os.name != "nt":
                 import termios
@@ -1543,6 +1791,18 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                 if tunnels is None:
                     raise ValueError("The VM opened a tunnel this session did not allow.")
                 tunnels.handle(event)
+            for chat in packet.get("history") or []:
+                try:
+                    keep_chat(root, chat)
+                except OSError:
+                    pass  # The chat stays in the VM; the screen saves it again after its next turn.
+            for identity in packet.get("history_open") or []:
+                if isinstance(identity, str):
+                    threading.Thread(target=answer_open, args=(control, root, identity, done), daemon=True).start()
+            # A plan the person chose in the screen: its sites open and its sign-in goes in.
+            if isinstance(packet.get("subscription"), dict) and fields:
+                tunnels = plans.grant(control, packet["subscription"], tunnels)
+            plans.keep(packet.get("credentials"))
             request = packet.get("switch")
             if isinstance(request, dict) and switching:
                 relaunch = take_switch(control, request, entries, switching["vm_base"], memory, server, store) or relaunch
@@ -1579,7 +1839,12 @@ def launch(name, server, key_file, model, workspace, arguments, interactive=True
                 # hangs up the harness, which can save its work, and takes the setup files out of
                 # the copy. Once the VM stops, its agent refuses every file of the copy.
                 try:
-                    control.post("/finish", {})
+                    finished = control.post("/finish", {})
+                    # The chat the screen saved as it ended, and a sign-in renewed as it ended.
+                    for chat in finished.get("history") or [] if isinstance(finished, dict) else []:
+                        keep_chat(root, chat)
+                    if isinstance(finished, dict) and plans is not None:
+                        plans.keep(finished.get("credentials"))
                 except (OSError, ValueError, http.client.HTTPException):
                     pass
             if sandbox:

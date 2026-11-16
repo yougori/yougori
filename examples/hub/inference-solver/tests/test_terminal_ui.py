@@ -350,5 +350,37 @@ class Drawing(unittest.TestCase):
         run.assert_called_once_with("pentestgpt", ["pentestgpt", "--log-dir", "reports/pentestgpt"])
 
 
+class History(unittest.TestCase):
+    """What a Yougori client tells the screen's pane of the chat (OSC 7718), and the earlier chat
+    the screen gives it."""
+
+    def test_the_chat_is_told_only_inside_the_pane(self):
+        import base64
+        import os
+        with patch.dict(os.environ, {"YOUGORI_PANE": "1"}):
+            word = terminal_ui.chat_word("turn", "Map the API ✓", "user")
+            self.assertTrue(word.startswith("\x1b]7718;turn;user;") and word.endswith("\x07"), word)
+            self.assertEqual(base64.b64decode(word[len("\x1b]7718;turn;user;"):-1]).decode(), "Map the API ✓")
+            self.assertTrue(terminal_ui.chat_word("tool", "Web open").startswith("\x1b]7718;tool;"))
+            long = terminal_ui.chat_word("turn", "é" * 100000, "assistant")
+            self.assertLessEqual(len(long), 256 * 1024, "within what the pane reads")
+            self.assertEqual(terminal_ui.chat_word("turn", "", "user"), "")
+        with patch.dict(os.environ, {"YOUGORI_PANE": ""}):
+            self.assertEqual(terminal_ui.chat_word("turn", "x", "user"), "")
+
+    def test_the_earlier_chat_is_read_once(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "earlier-chat.md"
+            path.write_text("[This conversation began earlier…]\nUser: hi\n", encoding="utf-8")
+            with patch.dict(os.environ, {"YOUGORI_CONTEXT_FILE": str(path)}):
+                self.assertEqual(terminal_ui.earlier_chat(), "[This conversation began earlier…]\nUser: hi")
+                self.assertFalse(path.exists())
+                self.assertEqual(terminal_ui.earlier_chat(), "")
+        with patch.dict(os.environ, {"YOUGORI_CONTEXT_FILE": ""}):
+            self.assertEqual(terminal_ui.earlier_chat(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

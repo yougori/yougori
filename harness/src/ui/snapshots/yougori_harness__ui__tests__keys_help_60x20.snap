@@ -19,7 +19,7 @@ expression: narrow
 │  ctrl+p          commands: harness, model, mode, sessions…
 │  tab             next mode (when the box is empty)
 │  /               commands: Yougori's, then the harness's …
-│  ↑↓ more (1 of 20)
+│  ↑↓ more (1 of 22)
 └  esc close
  OpenCode · qwen3-coder-30b · 10% context · Build
 [no cursor]

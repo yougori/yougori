@@ -3,7 +3,23 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
+
+// The catalogue the pages show (site/harnesses.json, site/categories.json), so the expectations follow it.
+const site = name => JSON.parse(readFileSync(new URL('../site/' + name, import.meta.url), 'utf8'));
+const KINDS = site('categories.json');
+const HELD = site('harnesses.json').filter(h => h.id !== 'yougori');
+// The harnesses inside Yougori, grouped as its page lists them (the categories' order), but those `without`.
+const inside = (without = []) => KINDS.flatMap(kind => HELD.filter(h => h.category === kind.id && !without.includes(h.id)));
+// What the Yougori row says of them: how many, then how many of each kind.
+const insideMeta = (without = []) => {
+  const held = inside(without);
+  const kinds = KINDS.map(kind => [kind.label, held.filter(h => h.category === kind.id).length]).filter(([, n]) => n);
+  return `${held.length} harness${held.length === 1 ? '' : 'es'} inside · ` + kinds.map(([label, n]) => `${n} ${label}`).join(' · ');
+};
+// The kinds the page has a group for.
+const GROUPS = KINDS.filter(kind => HELD.some(h => h.category === kind.id));
 
 const child = spawn('python', ['-I', '-B', fileURLToPath(new URL('./browser_fixture.py', import.meta.url))], { stdio: ['pipe', 'pipe', 'inherit'] });
 const stopped = new Promise(resolve => child.once('exit', resolve));
@@ -31,20 +47,40 @@ try {
   assert.equal(await page.locator('#harnesses-list .entry').count(), 1);
   assert.equal(await page.locator('#harnesses-list .entry-name').textContent(), 'Yougori');
   assert.equal(await page.locator('#harnesses-list [data-harness]').getAttribute('data-harness'), 'yougori');
-  assert.equal(await page.locator('#harnesses-list .entry-meta').textContent(), '21 harnesses inside · 16 Coding · 5 Cyber Coding');
+  assert.equal(await page.locator('#harnesses-list .entry-meta').textContent(), insideMeta());
   // The note under it says what each kind reaches: a coding harness may be given more, a security harness
   // only ever its target and this server.
   assert.equal(await page.locator('#harnesses-column .catalog-note').textContent(), 'Blue terminals. Your models. Each harness runs in an isolated Sandbox VM. A coding harness reaches only this server unless you choose more. A security harness reaches only its target and this server.');
-  // Harnesses, models and sandboxes share one page, side by side, with no tabs; sandboxes join only when
-  // a computer offers them, and the page keeps room on both sides.
+  // Yougori, models and sandboxes share one page with no tabs: Yougori, holding the harnesses, across
+  // the top, and the models below it at the same width (sandboxes join beside them only when a computer
+  // offers them); the page keeps room on both sides.
   assert.equal(await page.locator('#nav a[href="#harnesses"], #nav a[href="#models"], #nav a[href="#sandboxes"]').count(), 0);
   await page.locator('#models-list .entry').last().waitFor();
   const tools = await page.locator('#harnesses-column').boundingBox(), modelsBox = await page.locator('#models-column').boundingBox();
-  assert.equal(modelsBox.y, tools.y);
-  assert.ok(modelsBox.x > tools.x + tools.width && Math.abs(tools.width - modelsBox.width) < 1, 'The tools and models columns are side by side');
+  assert.ok(modelsBox.y > tools.y + tools.height, 'The models are below Yougori');
+  assert.ok(Math.abs(modelsBox.x - tools.x) < 1 && Math.abs(tools.width - modelsBox.width) < 1, 'Yougori spans the width the models take');
   assert.ok(tools.x >= 40, 'The page keeps room on its left');
-  // Yougori's card starts on the line of the models' search.
-  assert.equal((await page.locator('#harnesses-list').boundingBox()).y, (await page.locator('#models-column .search-box').boundingBox()).y);
+  assert.equal(await page.locator('.overview > .column#harnesses-column').count(), 0);
+  // Yougori's card is set apart (the palette's strong colours, its label Harness) and says, compactly, how
+  // to install and use it: install Yougori, copy and run its command, approve the code, or open every harness.
+  const card = page.locator('#harnesses-list .entry.feature');
+  assert.equal(await card.locator('.tag').textContent(), 'Harness');
+  assert.notEqual(await card.evaluate(el => getComputedStyle(el).backgroundColor), await page.locator('#models-list .entry').first().evaluate(el => getComputedStyle(el).backgroundColor));
+  assert.equal(await card.locator('#top-get-yougori').getAttribute('href'), 'https://yougori.com/#download');
+  assert.equal(await card.locator('#top-code').textContent(), `yougori inference run yougori --server "${url}"`);
+  assert.equal(await card.locator('#top-copy').getAttribute('data-copy'), `yougori inference run yougori --server "${url}"`);
+  assert.equal(await card.locator('#top-connect').getAttribute('href'), '#connect');
+  assert.equal(await card.locator('.feature-steps > li').count(), 4);
+  assert.ok((await card.boundingBox()).height < 140, "Yougori's card stays compact");
+  // Offline models leave the main page: with their server gone the list says none is online, and they
+  // come back when it answers again.
+  assert.equal(await fixture('offline'), 'offline');
+  await page.reload();
+  await page.getByText('No models are online right now.', { exact: true }).waitFor();
+  assert.equal(await page.locator('#models-list .entry').count(), 0);
+  assert.equal(await fixture('online'), 'online');
+  await page.reload();
+  await page.locator('#models-list .entry').last().waitFor();
   assert.equal(await page.locator('#sandboxes-column').isVisible(), false);
   // API keys are a dropdown at the right of the main page's title; visitors are asked to sign in first.
   const title = await page.locator('#section-title').boundingBox(), keysButton = await page.locator('#keys-button').boundingBox();
@@ -54,6 +90,13 @@ try {
   assert.equal(await page.locator('#keys-panel').getByRole('link', { name: 'Sign in ↗' }).getAttribute('href'), '#keys');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#keys-panel').isVisible(), false);
+  // Your APIs sit beside API keys, before them; visitors are asked to sign in first too.
+  const apisButton = await page.locator('#apis-button').boundingBox();
+  assert.ok(apisButton.x > title.x + title.width && apisButton.x < keysButton.x, 'Your APIs come before API keys');
+  await page.locator('#apis-button').click();
+  await page.locator('#apis-panel').getByRole('link', { name: 'Sign in ↗' }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#apis-panel').isVisible(), false);
   // Yougori's card opens its page, at its own address.
   await page.locator('[data-harness="yougori"]').click();
   await page.locator('#harness-install-inline').waitFor();
@@ -96,25 +139,25 @@ try {
   // Inside: the harnesses offered here, coding then security as the command lists them, one row each with
   // what it asks and a copy of its own command, under the steps, Open it again and the requirements. The page
   // shows the command itself only at the top. Yougori's own agent is not listed inside itself.
-  assert.deepEqual(await page.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['Install and start', 'Open it again', 'Coding', 'Cyber Coding']);
-  assert.deepEqual(await page.locator('#harness-install-inline > *').evaluateAll(parts => parts.map(part => part.id || part.className)), ['panel', 'panel', 'install-details', 'group-coding', 'group-security']);
+  assert.deepEqual(await page.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['Install and start', 'Open it again', ...GROUPS.map(kind => kind.label)]);
+  assert.deepEqual(await page.locator('#harness-install-inline > *').evaluateAll(parts => parts.map(part => part.id || part.className)), ['panel', 'panel', 'install-details', ...GROUPS.map(kind => 'group-' + kind.id)]);
   assert.equal(await page.locator('#harness-install-inline pre').count(), 2);
-  const inside = await page.locator('[data-inside]').evaluateAll(links => links.map(link => link.dataset.inside));
-  assert.equal(inside.length, 21);
-  assert.deepEqual(inside.slice(16), ['strix', 'shannon', 'pentagi', 'pentestgpt', 'hexstrike']);
-  assert.equal(inside.includes('yougori'), false);
+  const listed = await page.locator('[data-inside]').evaluateAll(links => links.map(link => link.dataset.inside));
+  assert.deepEqual(listed, inside().map(h => h.id));
+  assert.deepEqual(listed.filter(id => HELD.find(h => h.id === id).category === 'security'), ['shannon', 'pentagi', 'pentestgpt', 'hexstrike']);
+  assert.equal(listed.includes('yougori'), false);
   const pi = page.locator('#inside-pi');
   assert.equal(await pi.locator('.tag').textContent(), 'Ready');
   assert.equal(await pi.locator('.entry-text').textContent(), (await (await page.request.get(url + '/api/harnesses')).json()).harnesses.find(h => h.id === 'pi').description);
   // A harness that asks nothing of its own says nothing about it.
   assert.equal(await pi.locator('.entry-meta').count(), 0);
   assert.equal(await page.locator('#inside-swe .entry-meta').textContent(), 'Asks for: the issue to fix.');
-  assert.equal(await page.locator('#inside-strix .entry-meta').textContent(), 'Asks for: target, permission, how far it may go. Optional: what is off limits, a test login, source code, focus.');
+  assert.equal(await page.locator('#inside-pentestgpt .entry-meta').textContent(), 'Asks for: target, permission, how far it may go. Optional: what is off limits, a test login, source code, focus.');
   assert.equal(await page.locator('#inside-shannon .entry-meta').textContent(), 'Asks for: target, permission, how far it may go, source code. Optional: what is off limits, a test login, focus.');
   const copyPi = pi.getByRole('button', { name: 'Copy command for Pi', exact: true });
   assert.equal(await copyPi.textContent(), 'Copy command');
   assert.equal(await copyPi.getAttribute('data-copy'), `yougori inference run pi --server "${url}"`);
-  assert.equal(await page.locator('#inside-strix [data-copy]').getAttribute('data-copy'), `yougori inference run strix --server "${url}"`);
+  assert.equal(await page.locator('#inside-pentestgpt [data-copy]').getAttribute('data-copy'), `yougori inference run pentestgpt --server "${url}"`);
   await copyPi.click();
   await page.waitForFunction(() => document.querySelector('#inside-pi [data-copy]').textContent === 'Copied');
   // Security harnesses: permission before anything starts, the target's reach with nothing more offered,
@@ -227,13 +270,13 @@ try {
   assert.ok(againSwe.includes(`SWE-agent's own answer: --set issue="..." (the issue to fix). Add --workspace "C:\\path\\to\\project" to name the project folder.`), againSwe);
   // A harness whose VM image is not published yet is in preparation: its row says why and copies no
   // command, its own page says so, and Yougori stays ready with the others.
-  assert.equal(await fixture('unpublish strix aider'), 'unpublished');
+  assert.equal(await fixture('unpublish pentestgpt aider'), 'unpublished');
   await other.goto(url + '/');
   await other.locator('#harnesses-list .entry').waitFor();
-  assert.equal(await other.locator('#harnesses-list .tag').textContent(), 'Ready');
+  assert.equal(await other.locator('#harnesses-list .tag').textContent(), 'Harness');
   await other.locator('[data-harness="yougori"]').click();
-  await other.locator('#inside-strix').waitFor();
-  for (const id of ['strix', 'aider']) {
+  await other.locator('#inside-pentestgpt').waitFor();
+  for (const id of ['pentestgpt', 'aider']) {
     const row = other.locator('#inside-' + id);
     assert.equal(await row.locator('.tag').textContent(), 'In preparation');
     assert.equal(await row.locator('.entry-meta').textContent(), "The administrator has not published this harness's Sandbox VM image yet.");
@@ -242,8 +285,8 @@ try {
   assert.equal(await other.locator('#inside-pi .tag').textContent(), 'Ready');
   assert.equal(await other.locator('#inside-pi [data-copy]').count(), 1);
   assert.equal(await other.locator('#guide-code').count(), 1);
-  await other.locator('[data-inside="strix"]').click();
-  await other.locator('#section-title', { hasText: 'Strix' }).waitFor();
+  await other.locator('[data-inside="pentestgpt"]').click();
+  await other.locator('#section-title', { hasText: 'PentestGPT' }).waitFor();
   assert.deepEqual(await other.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['In preparation']);
   assert.equal(await other.locator('#harness-install-inline .small-banner').textContent(), "The administrator has not published this harness's Sandbox VM image yet.");
   assert.equal(await other.locator('#guide-code, #launch-code, [data-copy]').count(), 0);
@@ -255,9 +298,9 @@ try {
   assert.equal(await other.locator('#harnesses-list .tag').textContent(), 'In preparation');
   await other.locator('[data-harness="yougori"]').click();
   await other.locator('#inside-pi').waitFor();
-  assert.deepEqual(await other.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['In preparation', 'Coding', 'Cyber Coding']);
+  assert.deepEqual(await other.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['In preparation', ...GROUPS.map(kind => kind.label)]);
   assert.equal(await other.locator('#harness-install-inline .tag.ready, #harness-install-inline [data-copy], #guide-code, #launch-code').count(), 0);
-  assert.equal(await other.locator('#harness-install-inline .entry-meta', { hasText: "has not published this harness's Sandbox VM image" }).count(), 21);
+  assert.equal(await other.locator('#harness-install-inline .entry-meta', { hasText: "has not published this harness's Sandbox VM image" }).count(), HELD.length);
   assert.ok((await other.locator('.detail-side .facts').textContent()).includes('In preparation'));
   assert.equal(await fixture('publish'), 'published');
   await other.close();
@@ -286,7 +329,7 @@ try {
   assert.ok(phoneModels.y > phoneTools.y + phoneTools.height && phoneModels.width === phoneTools.width && phoneTools.width > 340, 'Phones stack the columns');
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'The main page overflows on phones');
   // Yougori's page and a harness's own page fit phones too.
-  for (const harness of ['yougori', 'strix']) {
+  for (const harness of ['yougori', 'pentestgpt']) {
     await page.goto(url + '/#harnesses/' + harness);
     await page.locator('#launch-code').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `The page of ${harness} overflows on phones`);
@@ -305,30 +348,30 @@ try {
   // harnesses inside Yougori, with no box for Yougori itself.
   await page.getByRole('heading', { name: 'Set up your inference', exact: true }).waitFor();
   assert.equal(await page.locator('#choices-form [name="home"]:checked').getAttribute('value'), 'harnesses');
-  assert.equal(await page.locator('#choice-count').textContent(), '21 of 21 harnesses offered');
+  assert.equal(await page.locator('#choice-count').textContent(), `${HELD.length} of ${HELD.length} harnesses offered`);
   assert.equal(await page.locator('#choices-form [name="harness"][value="yougori"]').count(), 0);
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await page.getByRole('button', { name: 'Save and continue ↗' }).click();
   await page.getByText('Offer at least one harness, or choose another main page.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Select all', exact: true }).click();
   await page.getByLabel(/^Aider/).uncheck();
-  assert.equal(await page.locator('#choice-count').textContent(), '20 of 21 harnesses offered');
+  assert.equal(await page.locator('#choice-count').textContent(), `${HELD.length - 1} of ${HELD.length} harnesses offered`);
   // Yougori is offered with the harnesses inside it.
   const saving = page.waitForRequest(request => request.url() === url + '/api/admin/choices');
   await page.getByRole('button', { name: 'Save and continue ↗' }).click();
   const sent = JSON.parse((await saving).postData());
-  assert.equal(sent.harnesses.length, 21);
+  assert.equal(sent.harnesses.length, HELD.length);
   assert.ok(sent.harnesses.includes('yougori') && !sent.harnesses.includes('aider'), JSON.stringify(sent));
   await page.locator('#harnesses-list .entry').last().waitFor();
   assert.equal(await page.locator('#harnesses-list .entry').count(), 1);
-  assert.equal(await page.locator('#harnesses-list .entry-meta').textContent(), '20 harnesses inside · 15 Coding · 5 Cyber Coding');
+  assert.equal(await page.locator('#harnesses-list .entry-meta').textContent(), insideMeta(['aider']));
   const offered = Object.fromEntries((await (await page.request.get(url + '/api/harnesses')).json()).harnesses.map(h => [h.id, h.offered]));
   assert.deepEqual([offered.yougori, offered.aider, offered.codex], [true, false, true]);
   assert.equal((await page.request.get(url + '/install/aider.ps1')).status(), 404);
   // Yougori's page lists only the harnesses offered; an old link to another says it is not offered.
   await page.locator('[data-harness="yougori"]').click();
   await page.locator('[data-inside]').first().waitFor();
-  assert.equal(await page.locator('[data-inside]').count(), 20);
+  assert.equal(await page.locator('[data-inside]').count(), HELD.length - 1);
   assert.equal(await page.locator('[data-inside="aider"]').count(), 0);
   await page.locator('[data-inside="codex"]').click();
   await page.getByText('Requirements and source',{exact:true}).click();
@@ -381,6 +424,23 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#keys-panel').isVisible(), false);
   assert.equal((await fetch(url + '/v1/models', { headers: { Authorization: 'Bearer ' + key } })).status, 401);
+  // Your APIs: a member's own OpenAI-compatible APIs, with labelled boxes; one dropdown open at a time.
+  await page.locator('#keys-button').click();
+  await page.locator('#apis-button').click();
+  assert.equal(await page.locator('#keys-panel').isVisible(), false);
+  await page.locator('#api-form').waitFor();
+  for (const label of ['Name', 'Address', 'API key', 'Models (optional)', 'Context window (optional)']) {
+    assert.equal(await page.locator('#apis-panel').getByLabel(label, { exact: true }).count(), 1, label);
+  }
+  assert.equal(await page.locator('#apis-panel').getByLabel('API key', { exact: true }).getAttribute('type'), 'password');
+  await page.locator('#apis-panel').getByText('No APIs yet. Add one to use its models in every harness.', { exact: true }).waitFor();
+  // Only an HTTPS address is taken, and the person is told so in the dropdown.
+  await page.locator('#apis-panel').getByLabel('Name', { exact: true }).fill('My provider');
+  await page.locator('#apis-panel').getByLabel('Address', { exact: true }).fill('http://api.example.invalid/v1');
+  await page.getByRole('button', { name: 'Add API ↗' }).click();
+  await page.locator('#apis-panel [role="alert"]', { hasText: "Use the API's HTTPS address" }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#apis-panel').isVisible(), false);
   await page.locator('#nav a[href="#admin"]').click();
   await page.getByRole('heading', { name: 'Rent a cloud GPU', exact: true }).waitFor();
   await page.getByRole('heading', { name: 'Local GPUs', exact: true }).waitFor();
@@ -586,7 +646,7 @@ try {
   assert.match(await (await fetch(url + '/')).text(), /<html lang="en" data-palette="rose-pine">/);
   // Admin keeps the same choices: the chosen main page is the first column, and the site's name opens it.
   const choices = page.locator('#admin-choices');
-  assert.equal(await choices.locator('[name="harness"]:checked').count(), 20);
+  assert.equal(await choices.locator('[name="harness"]:checked').count(), HELD.length - 1);
   assert.equal(await choices.locator('[name="harness"][value="yougori"]').count(), 0);
   await choices.getByLabel(/^Models/).check();
   await choices.getByLabel(/^Aider/).check();
@@ -599,7 +659,7 @@ try {
   assert.equal(await page.locator('#nav a[aria-current="page"]').count(), 0);
   await page.goto(url + '/#admin');
   await choices.waitFor();
-  assert.equal(await choices.locator('[name="harness"]:checked').count(), 21);
+  assert.equal(await choices.locator('[name="harness"]:checked').count(), HELD.length);
   // With no harness offered, Yougori is not offered either, and the main page has no Harnesses column.
   await choices.getByRole('button', { name: 'Clear', exact: true }).click();
   const cleared = page.waitForResponse(response => response.url() === url + '/api/admin/choices');
@@ -614,24 +674,24 @@ try {
   await choices.waitFor();
   assert.equal(await choices.locator('[name="harness"]:checked').count(), 0);
   // With one harness offered, Yougori holds it alone, in one group.
-  await choices.getByLabel(/^Strix/).check();
+  await choices.getByLabel(/^PentestGPT/).check();
   const single = page.waitForResponse(response => response.url() === url + '/api/admin/choices');
   await choices.getByRole('button', { name: 'Save choices ↗' }).click();
   assert.equal((await single).status(), 200);
-  assert.deepEqual(JSON.parse((await single).request().postData()).harnesses, ['yougori', 'strix']);
+  assert.deepEqual(JSON.parse((await single).request().postData()).harnesses, ['yougori', 'pentestgpt']);
   await page.goto(url);
   await page.locator('#harnesses-list .entry').waitFor();
   assert.equal(await page.locator('#harnesses-list .entry-meta').textContent(), '1 harness inside · 1 Cyber Coding');
   await page.locator('[data-harness="yougori"]').click();
-  await page.locator('#inside-strix').waitFor();
+  await page.locator('#inside-pentestgpt').waitFor();
   assert.deepEqual(await page.locator('#harness-install-inline .panel-heading h2').allTextContents(), ['Install and start', 'Open it again', 'Cyber Coding']);
   assert.equal(await page.locator('#group-security .panel-heading .hint').textContent(), '1 harness');
-  assert.deepEqual(await page.locator('[data-inside]').evaluateAll(links => links.map(link => link.dataset.inside)), ['strix']);
+  assert.deepEqual(await page.locator('[data-inside]').evaluateAll(links => links.map(link => link.dataset.inside)), ['pentestgpt']);
   await page.goto(url + '/#admin');
   await choices.waitFor();
   assert.equal(await choices.locator('[name="harness"]:checked').count(), 1);
   await choices.getByRole('button', { name: 'Select all', exact: true }).click();
-  assert.equal(await choices.locator('[name="harness"]:checked').count(), 21);
+  assert.equal(await choices.locator('[name="harness"]:checked').count(), HELD.length);
   await choices.getByLabel(/^Harnesses/).check();
   await choices.getByRole('button', { name: 'Save choices ↗' }).click();
   await page.getByText('Main page and harnesses saved.', { exact: true }).waitFor();
@@ -717,8 +777,9 @@ try {
   await page.goto(url + '/#keys');
   await page.getByRole('button', { name: 'Create key ↗' }).waitFor();
   assert.equal(await page.locator('#keys-button').getAttribute('aria-expanded'), 'true');
-  // A deliberately rejected duplicate signup and a deliberately wrong computer code produce Chrome's normal HTTP error log.
-  assert.deepEqual(errors.filter(error => !(error.includes('400') && (error.endsWith(url + '/api/signup') || error.endsWith(url + '/api/compute/pair/inspect') || error.endsWith(url + '/api/admin/compute/models') || error.endsWith(url + '/api/admin/rentals/offers')))), []);
+  // A deliberately rejected duplicate signup, a deliberately wrong computer code and an API address that is not
+  // HTTPS produce Chrome's normal HTTP error log.
+  assert.deepEqual(errors.filter(error => !(error.includes('400') && (error.endsWith(url + '/api/signup') || error.endsWith(url + '/api/compute/pair/inspect') || error.endsWith(url + '/api/admin/compute/models') || error.endsWith(url + '/api/admin/rentals/offers') || error.endsWith(url + '/api/apis')))), []);
   console.log('Browser flow passed: public signup/login on desktop and mobile, member/admin boundaries, guest-first catalogs, scoped key/revoke, branding, invitations, themes and responsive layouts.');
 } finally {
   await browser?.close();

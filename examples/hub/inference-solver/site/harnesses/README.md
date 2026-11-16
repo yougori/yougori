@@ -13,7 +13,7 @@ the VM may reach (a security harness is not asked), and its CPU and memory. Then
 Cancel. The first time, before it lists the models, it shows a link and an eight-character code:
 sign in on the website, enter the code and approve the harness. The terminal then goes on by
 itself. No API key is created or copied. Run the same command next time;
-`yougori inference run strix --server URL` starts the list on Strix.
+`yougori inference run shannon --server URL` starts the list on Shannon.
 
 Every harness starts inside the Yougori harness: Yougori's own screen in front of the harness's
 own engine, in a Yougori Sandbox VM. The VM starts from the Yougori base image, and the launcher
@@ -50,7 +50,7 @@ outside the VM. Besides that, the VM reaches:
 
 ## Security harnesses
 
-Strix, Shannon, PentAGI, PentestGPT and HexStrike each ask:
+Shannon, PentAGI, PentestGPT and HexStrike (and Strix, which is not offered at present) each ask:
 
 - what to test: the practice app, a deliberately vulnerable app Yougori starts inside the VM, or
   web addresses, `host:port` or IPv4 addresses (`--set target=practice` or `--set target=URL`);
@@ -64,6 +64,108 @@ The VM reaches only the target and this inference. Yougori does not ask, and it 
 inside the Yougori screen. The report comes back to your folder after you review it: the folder
 Yougori asks for, or the source code's when you give it. Without a folder the report shows in the
 terminal and is not kept.
+
+## Harnesses for every kind of work
+
+Besides coding and security, Yougori holds harnesses for other kinds of work, in the website's
+categories (`site/categories.json`): agent frameworks, IT operations, data analysis, research,
+office and browser work, customer service, finance and science. Each runs its own engine on this
+inference's model, in the same VM, with the same reach and review as the others.
+
+Most of them are libraries and frameworks with no terminal of their own. They run in Yougori's own
+terminal for them, `agent_kit.py`, in the security harnesses' look (`terminal_ui.py`): each one's kit
+(`kits/NAME.py`) builds that harness's real engine and gives it the terminal's tools as its own kind
+of tool: list, read, write and search files, run a command, and, when the VM reaches the web, search
+the web and fetch pages. Each tool call shows on a row as it runs; the answer shows in Markdown.
+`/harness`, `/model` and `/new` work as for every harness in the pane. The others bring their own
+terminal client and run in the pane as they are.
+
+| Category | Harness | How it runs |
+| --- | --- | --- |
+| Coding | mini-SWE-agent, Continue (`cn`) | their own terminal |
+| Agent frameworks | LangGraph, Deep Agents, CrewAI, smolagents, Strands Agents, Google ADK, Microsoft Agent Framework | Yougori's terminal |
+| IT operations | HolmesGPT | its own terminal; it asks before each command |
+| Data analysis | Vanna, TaskWeaver, PandasAI | Yougori's terminal |
+| Research | GPT Researcher, Open Deep Research, PaperQA2, DeerFlow | Yougori's terminal |
+| Office and browser | Browser Use, Agent TARS, Stagehand, Eigent, OpenManus | Yougori's terminal |
+| Office and browser | OpenClaw | its own terminal (`openclaw chat`) |
+| Customer service | Pipecat, LiveKit Agents | Yougori's terminal, in text |
+| Finance | TradingAgents, FinRobot | Yougori's terminal (research, not advice) |
+| Science | GeoAgent, ChemCrow, Biomni | Yougori's terminal |
+
+Notes:
+
+- What needs the web: GPT Researcher, Open Deep Research and DeerFlow research the web only when the
+  VM reaches it (`--internet full`, or `--internet sites` naming the sites); without it they work from
+  the documents in the folder. Browser Use, Stagehand, Agent TARS, TradingAgents and FinRobot need the
+  web for their pages or data; all but Agent TARS say so at the start when the VM reaches only the
+  inference. ChemCrow needs it to start at all: its chemistry tools fetch their data as they load.
+- Offline: the base images hold tiktoken's token tables (cl100k, o200k), which several of these
+  libraries would otherwise fetch from the internet on first use.
+- Embeddings: this inference serves chat models, not embedding models. PaperQA2 uses its keyword
+  (sparse) embeddings and GPT Researcher ranks its sources by shared words (`kits/lexical.py`).
+- Python: the images have Python 3.12. PandasAI, ChemCrow and FinRobot declare older Pythons; their
+  packs install with `--ignore-requires-python` (PandasAI and FinRobot from a frozen, checked set).
+  Biomni and OpenManus also install from frozen sets: Biomni declares none of what it imports, and pip
+  does not finish resolving OpenManus's requirements.
+- Licences: Biomni runs in commercial mode (only commercially licensed datasets and tools) and its
+  data lake is not downloaded. TradingAgents' and FinRobot's market data is Yahoo Finance, whose terms
+  are for personal use; commercial use needs a licensed feed (their descriptions say so). PandasAI
+  3.0's core imports its enterprise folder (`pandasai/ee`, under PandasAI's Enterprise licence): the
+  pack carries Yougori's own stand-in there instead (`licenses/stand-ins/pandasai-ee`), and PandasAI
+  runs without its enterprise skills. Every pack's licences, and what was left out of it, are in its
+  `tool/THIRD-PARTY-LICENSES.txt` (`pack_licenses.py`); the images' own are in `/usr/share/licenses`
+  (harness/NOTICE.md says what and why).
+- Not offered: Claude Code (preinstalling it needs Anthropic's Commercial Terms of Service accepted)
+  and Strix (the Caido proxy it runs comes with no licence to pass it on). Their packs are not built
+  (`packages.json` "blocked").
+- Customer service: Pipecat's pipeline and LiveKit's AgentSession run in text; the person writes as a
+  customer or caller would. Both answer from the Markdown and text files in the folder.
+
+## History and plans
+
+**History.** The Yougori screen records each chat as it goes (`harness/src/history.rs`): the
+person's prompts, the harness's replies and the titles of the tools it ran. Yougori's own clients
+in the terminal pane (`agent_kit.py`, through `terminal_ui.py`) tell it their turns with OSC 7718
+(`turn;user|assistant;BASE64`, `tool;BASE64`); for any other client the pane keeps what its screen
+showed once the person typed to it. After every turn, and before the screen ends or switches, the
+screen saves the chat to the VM's guest (`/history/save`, with the session's switch token). The guest
+hands it to the launcher in `/poll` (`history`), and the launcher keeps it on the person's
+computer in the Yougori harness's private folder for the inference, beside its key:
+`history/ID.json` and a list, `index.json` (`vm_host.keep_chat`). The newest version of a chat wins. At `/start` the launcher says
+it keeps chats (`history`, with `resume` when a switch into a new VM brought a chat), then sends the
+list (`/history/index`). `/history` lists it; opening a chat this VM does not hold asks the
+launcher (`/poll` `history_open`, answered with `/history/body`). The chat a `/harness` switch into
+a new VM was in goes on there: the switch request names it (`chat`), and the next session opens it.
+
+A harness that takes a chat over gets the turns it has not seen with the next prompt
+(`history::context`). The newest turns go whole, within a quarter of its window. When older turns
+do not fit, the inference's model writes notes on them first (`history::summarize`); if it cannot,
+they are left out with a line that says so. Yougori's own clients take the chat from a file the
+screen writes before they start (`YOUGORI_CONTEXT_FILE`, read once by `terminal_ui.earlier_chat`).
+A launcher or image from before this keeps the chats in the VM only, and `/history` says so.
+
+**Plans.** Codex can run on the person's own ChatGPT subscription, and Claude Code on their Claude
+subscription once Claude Code is offered (it is not at present: harness/NOTICE.md)
+(`profiles.SUBSCRIPTIONS`). Their model ids start with `subscription:` (`subscription:chatgpt/default`)
+and the relay never serves them. Choosing one in `/model` asks how to sign in. For ChatGPT: the
+sign-in already in this VM, this computer's own Codex's (`auth.json`, which OpenAI documents copying
+to another machine), the one Yougori kept from an earlier session, or signing in. For Claude, only
+Claude Code's own sign-in in this VM (or the one it already made there): Anthropic lets no third
+party collect, store or pass on Claude credentials, so the launcher never reads, keeps or sends one
+(`vm_host.TRANSFERABLE`, `vm_guest.TRANSFERABLE`). The screen asks the guest
+(`/subscription`, with the switch token). The launcher decides the plan's sites itself
+(`vm_host.SUBSCRIPTION_SITES`: `anthropic.com`, `claude.ai` and `claude.com`, or `chatgpt.com` and
+`openai.com`) and opens the VM's proxy for chosen sites to them, starting it when the session had
+none. For ChatGPT it sends the chosen sign-in with them (`/subscription/granted`), and the guest
+writes it into Codex's own file. The engine then restarts on the plan through the proxy, with none
+of the relay's settings. When no sign-in is there yet, the screen first runs the client's own
+sign-in in its terminal pane (`claude auth login`, `codex login --device-auth`, which needs device
+code sign-in turned on in the person's ChatGPT security settings); Esc there goes back to the model
+before. A ChatGPT sign-in made or renewed in the VM goes back in `/poll` (`credentials`). The
+launcher keeps it in the inference's private folder (`subscriptions/chatgpt.json`) and, when it came
+from this computer's own Codex, writes the renewed one back there while that file is still as it was
+given, so both stay signed in. A Claude sign-in stays in the VM it was made in.
 
 ## The source setup
 

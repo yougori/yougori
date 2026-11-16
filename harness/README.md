@@ -93,6 +93,21 @@ starts once the last one has ended.
   switch command gets the session's switch token (`YOUGORI_SWITCH_TOKEN`), never an engine.
 - **Models.** The model switcher lists `spec.models`. Engines that switch in place (`live`) get
   `SetModel`; the rest restart through `spec.respec` with the new model.
+- **History** (`src/history.rs`). Every harness's chat is recorded as it goes, saved after each
+  turn through the VM's guest to the person's computer, and kept there. `/new` starts a new chat
+  and keeps the one before (the engine's own new session, or a fresh start); `/history` opens
+  any earlier chat, from any harness. A harness that takes a chat over (a `/harness` switch, a
+  model switch that restarts it, a chat opened) gets the turns it has not seen with the next
+  prompt, compacted to a quarter of its window: the newest turns whole, the model's notes on the
+  older ones. Terminal-pane clients of Yougori's own tell their turns with OSC 7718 and take the
+  chat from `YOUGORI_CONTEXT_FILE`; for others the pane keeps what their screen showed.
+- **Plans** (`spec.sign_in`, `spec.engine_model`, `PLANS`). Claude Code and Codex list the
+  person's own Claude or ChatGPT subscription in `/model` (`subscription:claude/sonnet`). Choosing
+  one asks how to sign in, has the launcher open the provider's sites alone, and restarts the
+  engine on the plan. A spec whose client is not signed in runs the client's own sign-in in the
+  terminal pane first (`Ended::SignIn`), then the engine. A plan whose sign-in may not travel
+  (`Plan::transferable`: Claude's) offers only its client's own sign-in in the VM.
+  `site/harnesses/README.md` (History and plans) has the VM's side; NOTICE.md says why.
 - **Our own agent** (`src/native`): streaming tool calls, a step limit, a stuck-loop guard,
   retries, cancel, automatic compaction for 32K windows; tools bash, read, write, edit, glob,
   grep, list, webfetch (when reach allows), todowrite, task (one level of subagents), question;

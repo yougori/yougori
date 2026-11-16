@@ -44,6 +44,12 @@ class Launcher(unittest.TestCase):
         self.root = Path(folder.name)
         self.answers = self.root / "answers.json"
         self.answers.write_text(json.dumps({"target": "practice", "depth": "safe", "login_user": "test@example.com"}))
+        # Strix is not offered at present (packages.json "blocked": the Caido proxy it runs needs Caido
+        # Labs' permission to be passed on); these tests keep it as their security harness.
+        unblocked = {key: value for key, value in solver.PACKAGES["strix"].items() if key != "blocked"}
+        patcher = patch.dict(solver.PACKAGES, {"strix": unblocked})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def main(self, *argv, environment=None, key=True, catalog=({"id": "m"},), refuse=None):
         """Runs solver.main with the engine, the website and the VM replaced; returns the

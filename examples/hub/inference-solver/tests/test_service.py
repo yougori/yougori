@@ -17,6 +17,8 @@ import unittest
 from unittest.mock import patch
 
 SITE = Path(__file__).resolve().parents[1] / "site"
+# Every harness of the website's catalogue.
+HARNESSES = json.loads((SITE / "harnesses.json").read_text(encoding="utf-8"))
 sys.path.insert(0, str(SITE))
 import attached
 from server import NOT_OFFERED, Service, Server
@@ -272,7 +274,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.call("/api/models")[1], {"models": []})
         status, catalog, _ = self.call("/api/harnesses")
         self.assertEqual(status, 200)
-        self.assertEqual(len(catalog["harnesses"]), 22)
+        self.assertEqual(len(catalog["harnesses"]), len(HARNESSES))
         self.endpoint()
         status, catalog, _ = self.call("/api/models")
         self.assertEqual(status, 200)
@@ -425,7 +427,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.call("/api/session")[1]["choices"], {"home": "models", "chosen": True})
         # Hidden harnesses stay listed for the CLI, unavailable with the reason, and cannot be set up.
         listed = {h["id"]: h for h in self.call("/api/harnesses")[1]["harnesses"]}
-        self.assertEqual(len(listed), 22)
+        self.assertEqual(len(listed), len(HARNESSES))
         self.assertEqual({name for name, h in listed.items() if h["offered"]}, {"pi", "codex"})
         # Neither from its own image nor inside the Yougori harness.
         for field in ("setup", "held"):

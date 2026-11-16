@@ -1213,13 +1213,13 @@
     },
     {
       "path": "cli/Cargo.lock",
-      "sha256": "d0f8b99defdc8af6eb2a8f4cf867b4add5a8f87af95af0052f920d8dbd424e64",
+      "sha256": "41c5894630c29cfd04a555f1659a0758decd971d1334a531beee87fc16dae753",
       "bytes": 85750,
       "mode": 420
     },
     {
       "path": "cli/Cargo.toml",
-      "sha256": "9402eb18dc03d632643cf5be650315df48344b31ccd2eae05063a8be69224d00",
+      "sha256": "5d6fdc9bacc8173b311b97318df1d1b3f83f69020fd232b82440587c10d50284",
       "bytes": 1627,
       "mode": 420
     },
@@ -1543,8 +1543,8 @@
     },
     {
       "path": "cli/src/inference.rs",
-      "sha256": "f7cd002d48f2e7f9c97275a5614bdbc760ebd5c10021cf6420f2703aa5942742",
-      "bytes": 263700,
+      "sha256": "de359969a31feef489ecf5ec91e050f25b712e72dc771f0bcd2ddf44874c422d",
+      "bytes": 264725,
       "mode": 420
     },
     {
@@ -2863,13 +2863,13 @@
     },
     {
       "path": "engine/Cargo.lock",
-      "sha256": "603208f5a273e6ad80c5daeb1a7497850823b4714301b77f6cbe2f2a90672922",
+      "sha256": "45ebbd8d4a2a2cec655d96b761c98aa2c620123b3c374020166356ebb7e36a7f",
       "bytes": 196869,
       "mode": 420
     },
     {
       "path": "engine/Cargo.toml",
-      "sha256": "dced8e7b707c3a4d6d586bbc63ad2ba83784bf989547a7f5121a9036aad4b2dd",
+      "sha256": "6ee7958851476b9caa778025168d6adb9b14ad704a7f0ccb1c692741bd3a8986",
       "bytes": 1668,
       "mode": 420
     },
@@ -3373,8 +3373,8 @@
     },
     {
       "path": "examples/hub/inference-solver/README.md",
-      "sha256": "5a21d757c0f32ed510285cf2125e5a6588549fc0b0d3a3874004a40e8ddf2823",
-      "bytes": 33193,
+      "sha256": "23541175f70fecaa46ad8bf0c03c507bf5f9f8aaff47a1d729596a7586543317",
+      "bytes": 35476,
       "mode": 420
     },
     {
@@ -3409,14 +3409,26 @@
     },
     {
       "path": "examples/hub/inference-solver/scripts/build-vm-images.py",
-      "sha256": "82d35744383b775e5e0de0225a093ec6c4ff697caa6b6d9110e6ad206b0a8a85",
-      "bytes": 35411,
+      "sha256": "c2eab67877579bdcfdc08e342457ab84913d647ebefe3567aab5f827e2d6181d",
+      "bytes": 35561,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/scripts/harness-notices.py",
+      "sha256": "dbf8710cce55b71422f306daf414c6c4e5d43215a0fb41c7b85ded47d4958d5c",
+      "bytes": 3469,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/apis.py",
+      "sha256": "a95b491bc18f715eeec10691920c5442dd83c6935b21226a01152259904352da",
+      "bytes": 10334,
       "mode": 420
     },
     {
       "path": "examples/hub/inference-solver/site/app.js",
-      "sha256": "3d850960c77d4aca492351d65347987f05cc06b3d118caa0bf964b3e746086de",
-      "bytes": 84382,
+      "sha256": "961d21f8079141f4ac2cef0f1d4b6bb52601fe530048d3b0a26aa4714ac3a6d0",
+      "bytes": 91183,
       "mode": 420
     },
     {
@@ -3427,8 +3439,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/categories.json",
-      "sha256": "627eba794567169b16d8571a0d07a93fb3fe88484603d77a8eaa9c38997c1b55",
-      "bytes": 129,
+      "sha256": "fbabe7d28221b95a309394e9792c92362c69b99ae50480fe98ded11538fdc03f",
+      "bytes": 658,
       "mode": 420
     },
     {
@@ -3499,8 +3511,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/gateway.py",
-      "sha256": "ccf59a554d9b9a73d200a5d48d0138949721a5ce8323234dddcc1fdc9510558b",
-      "bytes": 24200,
+      "sha256": "eb592c7e178810bbaa9b0edc558613171f7b342cb9957fcebfbda84f9a0d19ea",
+      "bytes": 27390,
       "mode": 420
     },
     {
@@ -3523,8 +3535,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses.json",
-      "sha256": "249d00325b3724a84ee876a384794bae5106f9cccb8a3e84938e3a1c35d3eef6",
-      "bytes": 25258,
+      "sha256": "dae3e33876b7a1346fce94fae1e76b595654acd8347145e96833950ccdec2804",
+      "bytes": 33789,
       "mode": 420
     },
     {
@@ -3535,14 +3547,20 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/Containerfile.yougori",
-      "sha256": "7563e875de6d7a792f4137ffdd78c1020d6f24676346676942e5ec33ee41263c",
-      "bytes": 5990,
+      "sha256": "8ac947696099ff29d9c530d25136bce9e9000adaeccf70499fc82b79fdd537f4",
+      "bytes": 8373,
       "mode": 420
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/README.md",
-      "sha256": "61cb8256413aa52b0a45420e30e29eabdf1219c7f61f0ec5d6fa993590ecf245",
-      "bytes": 14252,
+      "sha256": "eb1080760093d7497d8a2674fe73c4c8eccc01e1207084dfa3fe28d963bdb24d",
+      "bytes": 22526,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/agent_kit.py",
+      "sha256": "fa1c6fc018871a630c63f50e53c800902a032c4e1d9eead69b1e725f08892818",
+      "bytes": 24016,
       "mode": 420
     },
     {
@@ -3624,9 +3642,321 @@
       "mode": 420
     },
     {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/__init__.py",
+      "sha256": "85b9e2c0eef5c0f3782009df28135575fdf73afb03fe77cff7199249639493ed",
+      "bytes": 97,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/adk.py",
+      "sha256": "684a19e2caaae5a80aae147b893466627a1b503d1ce995d737899bf26247a79f",
+      "bytes": 2038,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/agentframework.py",
+      "sha256": "4abab1cf05a2d267294894df447a14c5b4ac5cf5fef1b69707deb557af08a27b",
+      "bytes": 1499,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/agenttars.py",
+      "sha256": "f013113d11aba9a9bc7df307d3ef575021c72378b5947844c58449fc921315d2",
+      "bytes": 4551,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/biomni.py",
+      "sha256": "4dc4c9c16b71138bab276e0c75a91c9646cb856e9f5aa069627c0d773a6c2925",
+      "bytes": 1844,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/browseruse.py",
+      "sha256": "f591b86df84607b815e771605071aff07f156e711bd2567d50fbf7fce3325413",
+      "bytes": 3388,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/chemcrow.py",
+      "sha256": "cbad071734788b357b48fbc173a0ce3eac353d272d70d6286897f7d84f1688b6",
+      "bytes": 3583,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/crewai.py",
+      "sha256": "630955eec2e3dd84521233d86b97b453ad1e7aa77c5c55a3436b96c186a61ab5",
+      "bytes": 3482,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/deepagents.py",
+      "sha256": "f5b1b698d8eefa0ecba60d246161a9b948fbac9d854b89ddd21e6465f192bc06",
+      "bytes": 1617,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/deerflow.py",
+      "sha256": "d2d8d0e541c20f0dc17319b804b74c75d5bbae301949af13c5b8988d560f17e2",
+      "bytes": 3624,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/eigent.py",
+      "sha256": "87a963b21cf6ed4d5fab4641dfe574be3253b637eb3124a4390841a78985dbf3",
+      "bytes": 3310,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/finrobot.py",
+      "sha256": "f22bb7a1d090b7a637121be8ead706b41df1eca8230ca09725ea1f054034fac0",
+      "bytes": 3365,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/geoagent.py",
+      "sha256": "416a07266af87cba7126cbb79f7f2662db9526801f0f501d121ce858100c06ca",
+      "bytes": 2083,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/gptresearcher.py",
+      "sha256": "40b32d67c8c49cc10b14817504ff9d53097f0063bbd0ceb250e2698ba81efc3f",
+      "bytes": 3167,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/langgraph.py",
+      "sha256": "690c98f45d78198260794171e78be94e90f25fd5697da5c14b20b9398cc9f71f",
+      "bytes": 1562,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/lc.py",
+      "sha256": "0e45f520bf36f1a595c0663e3440b47c550f0a04edc8163f250647f415f8f16f",
+      "bytes": 5289,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/lexical.py",
+      "sha256": "f5e1f6344bce2f52be756b38d21991da7b7b807815a19c39e22a57e188b19153",
+      "bytes": 1340,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/livekit.py",
+      "sha256": "d050f076fff70f885f8be66f3e74b46b0ad1044bf1348d5d8a66af0ba3641f72",
+      "bytes": 3340,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/opendeepresearch.py",
+      "sha256": "b9bdb7f5da150c45c29f0b53d03604e40c674c4a79f65cf45666f1fd24d86118",
+      "bytes": 3009,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/openmanus.py",
+      "sha256": "90d9c5e91f09b1efbcbc648416c22ca48a5e2f6b4cb9f2a660632e4d9274b442",
+      "bytes": 2949,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/pandasai.py",
+      "sha256": "38b351d7b6fd0668f6463cb85edce8358cc543950ac07b6005cc9e0fe5e9ac5a",
+      "bytes": 3287,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/paperqa.py",
+      "sha256": "2657a431dc82c300061060b0736dd8c1b02b50dcb3b7d13797e580e1fb5b4e62",
+      "bytes": 3115,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/pipecat.py",
+      "sha256": "73d17f9d37e5e2f1d13eb9f4d3c476d099c8c0cb56457bd6c02f1c3fc1c97b99",
+      "bytes": 4335,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/smolagents.py",
+      "sha256": "d47b0e229fe9e8a06c2620f1b65f4d15f70d12e20006b57143d041bf7f60d942",
+      "bytes": 2451,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/stagehand.py",
+      "sha256": "356ef371a772975b230a93085d648495c80c210c872ad4b182321a05f4a3df9f",
+      "bytes": 11679,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/strands.py",
+      "sha256": "2ad276abc9baca9308218016d76f684e03a0739e86d5a56942195e9d735b30ac",
+      "bytes": 1269,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/taskweaver.py",
+      "sha256": "b5baacd9bd567a4dba800ed59e3b0cdbd383a314bcda40a18d4809ef7a941095",
+      "bytes": 3128,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/tradingagents.py",
+      "sha256": "bf0b935023325e987bf463c09a32c1694bc2be43c9f39385bb51f8961cfe1027",
+      "bytes": 3792,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/kits/vanna.py",
+      "sha256": "bb3cb25d742e963c0b672939217d2bf2a1de824e5e75ac2ee055126a94032f13",
+      "bytes": 6786,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/README.txt",
+      "sha256": "fa6ce79f12643399602481f9b59dfd6555589c34c882fb80b5acd6ecd6d5c2b2",
+      "bytes": 2941,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/debian-licenses.sh",
+      "sha256": "fb16ab91f45934455ed437f2028f362564d1c84456dc4d53bd2af8d57db205ad",
+      "bytes": 2203,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/stand-ins/pandasai-ee/skills/__init__.py",
+      "sha256": "f96c31af53e74b19d794a15bc8ba1e4093805aef9c11ed7579915f18934ff826",
+      "bytes": 1079,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/stand-ins/pandasai-ee/skills/manager.py",
+      "sha256": "e24bda786ac5036bcf37a7c933de7f8e00550a853effe215dcde864d49adf55c",
+      "bytes": 894,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/AGPL-3.0.txt",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "bytes": 34523,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/BSD-2-Clause.txt",
+      "sha256": "90aff7fdfd5b973a5b2ffa315b55b72637eaf712f860f2388f647ef950807b99",
+      "bytes": 1417,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/BSD-3-Clause.txt",
+      "sha256": "1dbfac18304ad329b4fe1d628d442c2ff22c6d5d13cc03e54b09bd50c13786d6",
+      "bytes": 1615,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/Elastic-2.0.txt",
+      "sha256": "48255018b41fc0e965b1115af7e6779bc218bb8a6747d561da800d5022622aa2",
+      "bytes": 3860,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/GPL-2.0.txt",
+      "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+      "bytes": 17984,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/GPL-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "bytes": 35149,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/Go.txt",
+      "sha256": "38e867e5033a24f20ae8a1e0a6f34e6c255a5226ad47c38b2a7552fde270be30",
+      "bytes": 1575,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/ISC.txt",
+      "sha256": "160a40a52469698e6f05711c6ab86eb73564ea3d90ace9baba77b0fead37ffa3",
+      "bytes": 860,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/LGPL-2.1.txt",
+      "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+      "bytes": 26419,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/LGPL-3.0.txt",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "bytes": 7652,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/MIT.txt",
+      "sha256": "fd9c047c75c9422df88633c370d14b9fb766645b793e1793d96b26dc164864dc",
+      "bytes": 1186,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/MPL-2.0.txt",
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+      "bytes": 16726,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/Unlicense.txt",
+      "sha256": "b5065838cbac452dfc855ba6e6e031481ad2c68406f70d21ead9321374653e6c",
+      "bytes": 1212,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/grok-build-LICENSE.txt",
+      "sha256": "116f7778b9802e569b7fa3a532b17bd80eb13c67837def01eed093d4ea472f28",
+      "bytes": 11388,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/texts/grok-build-THIRD-PARTY-NOTICES.txt",
+      "sha256": "dcbdd42b8fe45aa28f67a7b9e82d9feadec2b958c050158aeaac460eba651d07",
+      "bytes": 763905,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/yougori-harness-crates.txt",
+      "sha256": "40ce893a2a9cb0474273404e030088b637771f072b75f643daec51ea0410c41b",
+      "bytes": 620934,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/licenses/yougori-runtime-MIT.txt",
+      "sha256": "9535135ba7e43d797183c0416a3f31ff2b2969bf6b17231c3af11ee1a2ecf520",
+      "bytes": 1064,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/site/harnesses/pack_licenses.py",
+      "sha256": "a6a71b079954e9f4019e445d30175ea732930fafbcc5989e0239a1676f275eab",
+      "bytes": 19529,
+      "mode": 420
+    },
+    {
       "path": "examples/hub/inference-solver/site/harnesses/packages.json",
-      "sha256": "d3d940205d10eae0ad40f251538d2c234ba6ccc1b3adad14d9ea191a1d32b399",
-      "bytes": 4513,
+      "sha256": "f1a347a3f9d2252f24df23cc2ab459744188b99f5cb0e7cf25efd7a5cf16225f",
+      "bytes": 31326,
       "mode": 420
     },
     {
@@ -3661,8 +3991,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/profiles.py",
-      "sha256": "5b0e265b9a10c47ff9256376a45180006fcf493b8c5fb6e25e90c775ebb6404c",
-      "bytes": 52760,
+      "sha256": "015144d33f00a20d25e7c7f3ac12cd029b509f792af34035f37c39c1422329ed",
+      "bytes": 65558,
       "mode": 420
     },
     {
@@ -3673,8 +4003,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/runtime.py",
-      "sha256": "28346097e6b8aaf5b979c770b83e368407c6b42d07ac6205b00af97b06b7ed69",
-      "bytes": 16469,
+      "sha256": "0cd44222316642e0db358d6ebba8d617a0ef4e4301b3b936632af3b878305b66",
+      "bytes": 16698,
       "mode": 420
     },
     {
@@ -3697,8 +4027,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/terminal_ui.py",
-      "sha256": "f1e176939927c715391d087c721752c98b7db64b7c329e1738ce32bf75992035",
-      "bytes": 65575,
+      "sha256": "82f05523a15ffa0f310f36f5dfe36e301fee9b01b6f7c0b6eac215f9d887de06",
+      "bytes": 69023,
       "mode": 420
     },
     {
@@ -3709,14 +4039,14 @@
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/vm_guest.py",
-      "sha256": "9de950a93b9855ddf5b8524c61c494cdebf59324cc638bb11a7598e230066fa7",
-      "bytes": 38723,
+      "sha256": "390d65082664ddb67b62e559310a8ace5e11f6fa45d3937474c4273c14e7b8af",
+      "bytes": 58742,
       "mode": 420
     },
     {
       "path": "examples/hub/inference-solver/site/harnesses/vm_host.py",
-      "sha256": "0a5e106c154e5f573568c3430f1688cd54857ce9a71ff4a92d58119161033a31",
-      "bytes": 84018,
+      "sha256": "27575dfee4424a6b644c1db65717d3bd89246ee219242b23998a83cd3f9186e7",
+      "bytes": 97764,
       "mode": 420
     },
     {
@@ -3847,8 +4177,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/server.py",
-      "sha256": "447572fa8685d9e81b499cfc2ac784634feef25dbba2e45b491caaf7c0d0fbe1",
-      "bytes": 48885,
+      "sha256": "2e7fe23a774833c6596554883d623f1474faca16d949d828425f56ed1c4fe5f3",
+      "bytes": 49890,
       "mode": 420
     },
     {
@@ -3859,8 +4189,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/style.css",
-      "sha256": "90e2641d631d8e9c3c47162961b7fbe4bf3b62ca2cac626ed1753d0de99b5ccb",
-      "bytes": 39399,
+      "sha256": "8a037d72b7ce7767b2908a1f7d801360ac0e3894cdea201543233b52a0d5a160",
+      "bytes": 41781,
       "mode": 420
     },
     {
@@ -3883,8 +4213,8 @@
     },
     {
       "path": "examples/hub/inference-solver/site/upstream.py",
-      "sha256": "c2d205e244f14a9ec57514782857826326db27dc4b9571c550c5ba1abac3c867",
-      "bytes": 8074,
+      "sha256": "df33dceafee20a0971b607bdc6dea36ece48fa2bfa20b80fb411e9c5681beb0a",
+      "bytes": 9415,
       "mode": 420
     },
     {
@@ -3901,14 +4231,14 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/browser.mjs",
-      "sha256": "bf5e91f4661adf9cd80ae59b0abb5d32d5c583b39f87669d3df5dd5aa5a39bc7",
-      "bytes": 61272,
+      "sha256": "7a22be12fb0aa654b638837a51094b0ad2135a8bb8fb5c476394f91224f1c505",
+      "bytes": 66190,
       "mode": 420
     },
     {
       "path": "examples/hub/inference-solver/tests/browser_fixture.py",
-      "sha256": "222cc0747a664b15dff5f139cc794f03cb845fc164e232c082f31a4431fcf1e1",
-      "bytes": 1804,
+      "sha256": "deefe9612c8362ceb5ae63f8e0efb68780d2d33ddd27ddaff720bef68b42de3c",
+      "bytes": 2857,
       "mode": 420
     },
     {
@@ -4086,6 +4416,18 @@
       "mode": 420
     },
     {
+      "path": "examples/hub/inference-solver/tests/test_agent_kit.py",
+      "sha256": "29250d469123fc0b016aa2264fa74dacb163e663fe4a50eeef219147f6adbd73",
+      "bytes": 15334,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/tests/test_apis.py",
+      "sha256": "c8b66570402f6fb58e5705f23aaf9b533a28ccfe41fa8273f6b5580283532268",
+      "bytes": 9315,
+      "mode": 420
+    },
+    {
       "path": "examples/hub/inference-solver/tests/test_bridge_acp.py",
       "sha256": "665a52a5d866786dbc2f00174ffa78a85f455713eff0b28a9c449eb8a80a5b45",
       "bytes": 13754,
@@ -4135,8 +4477,8 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_harness_questions.py",
-      "sha256": "95d6ef00c939d35e56624604338dbe5cd60fbbf66df25df05b12ff6f5da4be5c",
-      "bytes": 11235,
+      "sha256": "e992cf9e4ea6a3f856192645f5c7a75ba0ea03cc3881483813ed4f419333afe8",
+      "bytes": 11642,
       "mode": 420
     },
     {
@@ -4147,8 +4489,8 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_harness_transport.py",
-      "sha256": "89d58bc3efbd555f3778108e5984f9d374ddc48d0120a7bdd6e01c3200d89428",
-      "bytes": 43946,
+      "sha256": "1e0059cbaed660bea46b496e7a0d1b4be0bf088b4f7b94499148d68a17bc5a0a",
+      "bytes": 44376,
       "mode": 420
     },
     {
@@ -4159,8 +4501,14 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_headless_profiles.py",
-      "sha256": "cfd140274bf876a1c1d03896510cda31ce52deb0675e9d325ec148b0cf0de546",
-      "bytes": 16523,
+      "sha256": "84bb26fc1e250264e41abbcddf8f59a4e95aae06d343078174509a0a80405b18",
+      "bytes": 20358,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/tests/test_history.py",
+      "sha256": "1c8f767d1872797f8d48262e7c0ca189b00a3ba35866ad3f6201d0c692f5679a",
+      "bytes": 11712,
       "mode": 420
     },
     {
@@ -4179,6 +4527,12 @@
       "path": "examples/hub/inference-solver/tests/test_infrastructure.py",
       "sha256": "88189ba080119c26f23d6a553cda1145b1c6de33eb667da225f23b3f82958b78",
       "bytes": 8090,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/tests/test_licenses.py",
+      "sha256": "e82cdf9169a2888dfab07ff64e033d97b54f0c78cf9fb9f22153cb720f5a1f07",
+      "bytes": 10690,
       "mode": 420
     },
     {
@@ -4203,6 +4557,12 @@
       "path": "examples/hub/inference-solver/tests/test_pentagi_adapter.py",
       "sha256": "fe120532e81d51566dcc5df311cdb9e319bedbf0070409664d1f29883fed3b72",
       "bytes": 5850,
+      "mode": 420
+    },
+    {
+      "path": "examples/hub/inference-solver/tests/test_plans.py",
+      "sha256": "c21a8fe615c05c5ad9241f8a06ebb2e6e1742716e1865adb3546fcbee13cdada",
+      "bytes": 12876,
       "mode": 420
     },
     {
@@ -4237,8 +4597,8 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_service.py",
-      "sha256": "6ebfa5eaea7c21bb08db2ba14b4f435ac028bb05e02b12f04b65c12ae62bb45c",
-      "bytes": 31807,
+      "sha256": "8f4e2a2133f0fe65b7be3a55986327c031306f48a50c4a26c33b82aa54cb598c",
+      "bytes": 31953,
       "mode": 420
     },
     {
@@ -4255,8 +4615,8 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_terminal_ui.py",
-      "sha256": "8931a838cfacb12faf5402b2674adb84c7f5fde48a61645a0095e979effed033",
-      "bytes": 20336,
+      "sha256": "7c24606caed46a2144679b7e0ce07f9870113a3c9295b704c17efd6779a2b4a9",
+      "bytes": 22150,
       "mode": 420
     },
     {
@@ -4297,8 +4657,8 @@
     },
     {
       "path": "examples/hub/inference-solver/tests/test_yougori_images.py",
-      "sha256": "9b901eb7a46cfe1f707f00f6957c561aabccc0ee99e186e956d98ab359d6323a",
-      "bytes": 53243,
+      "sha256": "096ca50565059688cff970f9d619ca47d48a86214a3cb79ced74ecafb0351afc",
+      "bytes": 54111,
       "mode": 420
     },
     {
@@ -4765,13 +5125,13 @@
     },
     {
       "path": "grid/Cargo.lock",
-      "sha256": "191ea10ab0318f6412d089a049049a383612c222086d7567bceb80a90124c147",
+      "sha256": "898a181589ceb763515404c7da93d3baf40baafc08616dacbe23ce11c30f1aa0",
       "bytes": 38783,
       "mode": 420
     },
     {
       "path": "grid/Cargo.toml",
-      "sha256": "7daed9878adc64c6ecf084dfdba38bf7db7350b5e4ceb235245f2e33fb8f1e8f",
+      "sha256": "64d0b151e98c49e4eb9f55f2dcb7c1ec6d44a3abb742280f8e13d9cb7e8db247",
       "bytes": 2018,
       "mode": 420
     },
@@ -5515,32 +5875,32 @@
     },
     {
       "path": "harness/ADAPTERS.md",
-      "sha256": "932cbe0950f05ebaf2dce216c8745b5a9c41488f5530baa8507ca62c4a7be15a",
-      "bytes": 23000,
+      "sha256": "a65c63b293f05f8c8c705b6902ec6f90aef5bac819b9786dcb5013b895778049",
+      "bytes": 30652,
       "mode": 420
     },
     {
       "path": "harness/Cargo.lock",
-      "sha256": "06a773a97fb7cf8bfcb3162cbf8f93ca0e29d14b8d2dd61336258cf5e221dd37",
+      "sha256": "010c28d6642719cb4588159363e1f3850553f01d5cce27b39f16ad381725596e",
       "bytes": 90179,
       "mode": 420
     },
     {
       "path": "harness/Cargo.toml",
-      "sha256": "f698e4d658bd3041137463ac8f4fd26c3c882871653213d3659786cc1d4a80b2",
+      "sha256": "aa34f6a9311244029e5768c2440fb3ec8262ce34d686ad3ea477ee1e40446588",
       "bytes": 1291,
       "mode": 420
     },
     {
       "path": "harness/NOTICE.md",
-      "sha256": "a0de634b24a73f0febf9d041b4d98635dffa0490aa2d5a8b669c696ac2245bcc",
-      "bytes": 5214,
+      "sha256": "795a742ca59a1a212722fa9346653ec24ed08b9de0f6bf602813957bc8cccc01",
+      "bytes": 10155,
       "mode": 420
     },
     {
       "path": "harness/README.md",
-      "sha256": "b6c37e439b696566f4184b9dfc9bebb492d85a11bf303e194d9634db23f6ef84",
-      "bytes": 8227,
+      "sha256": "fffdfc326eb2cb9f72f705259aaa4cbef6b2b9dcdb96860ada5e88ac095a7dbb",
+      "bytes": 9629,
       "mode": 420
     },
     {
@@ -5557,14 +5917,14 @@
     },
     {
       "path": "harness/src/engines/acp/tests.rs",
-      "sha256": "ddb1cf76dfece5c0f3ebb147161cbb0bdf9bf6d4a75368e84591386a241903cf",
-      "bytes": 37213,
+      "sha256": "c646783f9d9425f9a22f1a96078416383baed76ef83196cc198375e908ba4576",
+      "bytes": 37270,
       "mode": 420
     },
     {
       "path": "harness/src/engines/claude.rs",
-      "sha256": "a77611c8d2c569007406442da33b641b8ac3a59f99076dce4b1f505d8c4ca631",
-      "bytes": 39386,
+      "sha256": "0318f642a0fa7a4072db75b32bb978b247a8d47bf570619dfe42a5d00c4d159c",
+      "bytes": 39580,
       "mode": 420
     },
     {
@@ -5575,14 +5935,14 @@
     },
     {
       "path": "harness/src/engines/codex.rs",
-      "sha256": "29c4caf999eddd2ce3de79882b8aa7155ec4a3a1b4bfb44504d45583d618d165",
-      "bytes": 60912,
+      "sha256": "354f4bd8c70489bec623ada82ff7bb7eed9cdc3cb89017dad4fb04f1baab889e",
+      "bytes": 61142,
       "mode": 420
     },
     {
       "path": "harness/src/engines/codex/tests.rs",
-      "sha256": "2c60523acfab2d3bf5882ed10b479d2fbdfc9570bd1dcc25e763f8b42182649b",
-      "bytes": 16711,
+      "sha256": "c4ce85e39522c05c0fe4be607c238e842b1709f6732edfc0199cfaa68c7a9e5e",
+      "bytes": 17922,
       "mode": 420
     },
     {
@@ -5623,14 +5983,20 @@
     },
     {
       "path": "harness/src/engines/services.rs",
-      "sha256": "263b3b6ac18f6810fc8852d2f2d4c0485daceb11b60afc7c7002c4f917c6ab97",
-      "bytes": 9612,
+      "sha256": "9ea36de6c7bb1636a95b1b68c8585e9bb4b51a4d11b68ba150d6d94ba02c0c3e",
+      "bytes": 9677,
+      "mode": 420
+    },
+    {
+      "path": "harness/src/history.rs",
+      "sha256": "3cf7480d36b7ade6be7f7ccbef54d375e2f37145a7ba65ed9c5f481192343130",
+      "bytes": 33608,
       "mode": 420
     },
     {
       "path": "harness/src/main.rs",
-      "sha256": "7fd3279574d9f1aafe25cebc9115a34a2af9d5c1fce21924528aebf678bbebdd",
-      "bytes": 3590,
+      "sha256": "16fb8d99a9843c024a0b2b59179bdc69fe16942637f9c8cc805c3568df28a68b",
+      "bytes": 3660,
       "mode": 420
     },
     {
@@ -5701,8 +6067,8 @@
     },
     {
       "path": "harness/src/native/mod.rs",
-      "sha256": "ba17fb4a59679718aa45b63f9f06ab41bbfc8aa2b206760135649b408c475ffa",
-      "bytes": 1240,
+      "sha256": "5764d615c6e303cffcaf76cd4e44bad4d1066c374b8547272e304656f9ccdf1a",
+      "bytes": 1352,
       "mode": 420
     },
     {
@@ -5767,8 +6133,8 @@
     },
     {
       "path": "harness/src/native/testutil.rs",
-      "sha256": "b12160f374de79b83b117eb55f15ba91f56b56f122732a96eb994bd7ffeab00a",
-      "bytes": 8923,
+      "sha256": "c04fedade1f81fc07b450870247ab33c419c4de83a619899ae71fe975d85b338",
+      "bytes": 8980,
       "mode": 420
     },
     {
@@ -5845,8 +6211,8 @@
     },
     {
       "path": "harness/src/spec.rs",
-      "sha256": "4696c17e714647eb13504f79dbb0f1dcd917a9edbd387bdf5aeb624029758dab",
-      "bytes": 11282,
+      "sha256": "cd3da372eb703fad3380c7c5c803ba3ddc3f78b038f5297fbf691b7799167fb9",
+      "bytes": 15557,
       "mode": 420
     },
     {
@@ -5857,8 +6223,8 @@
     },
     {
       "path": "harness/src/ui/draw.rs",
-      "sha256": "a1f9a89644cfa611860851ebfc994f00f6fa85ff2f38e093b72987e141c9f7ea",
-      "bytes": 35840,
+      "sha256": "6456e0fd582317c4b65e5a00158223b655047b5b67435cfd68c611fb807277c7",
+      "bytes": 35922,
       "mode": 420
     },
     {
@@ -5893,20 +6259,20 @@
     },
     {
       "path": "harness/src/ui/mod.rs",
-      "sha256": "86b4666bc5cddaa6f5110b4d5f55dd5cb4c882d2ded844db5e19754bdc732be0",
-      "bytes": 39032,
+      "sha256": "75a43d3b9830387336ded5c23af1984e506f3ae94d3bb3186cb3bf8dcc5fc274",
+      "bytes": 55174,
       "mode": 420
     },
     {
       "path": "harness/src/ui/overlay.rs",
-      "sha256": "5d8ee4aa2dedeb9a3c740b1b334a8a6efc7558fc1c1258d5754dcf0210b11035",
-      "bytes": 27546,
+      "sha256": "f51b4a86266258b43e84bb751e80a98d317aac540a965f4254fdd2c8b5ce2fb2",
+      "bytes": 27782,
       "mode": 420
     },
     {
       "path": "harness/src/ui/pane.rs",
-      "sha256": "aec4af89bece234f3b2b032e5b8e73d686e8b6e4d9b4d3d3b66ac47b49230ecf",
-      "bytes": 62189,
+      "sha256": "8ab0e8bc9586837636285d9ed041ff3578d2375c8e6cdf623d01040719ca959c",
+      "bytes": 79222,
       "mode": 420
     },
     {
@@ -5989,13 +6355,13 @@
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__keys_help_100x30.snap",
-      "sha256": "52fffe3c8c285afdefd5c238ad5994fa658058058e2351a15f9fad029fdb33d7",
-      "bytes": 1242,
+      "sha256": "bc128a33657566f7d06c335868e4709af363a17f64f0c0a7951e3b27aad5abc0",
+      "bytes": 1261,
       "mode": 420
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__keys_help_60x20.snap",
-      "sha256": "51d4a01915c8043588cf0a060899e7a485c7abacb1ad476fc1e7c99671b9a05c",
+      "sha256": "44ff50899ba778af124412d6c6e414c2af7c4bb8edc700cee5c33052fd039d4d",
       "bytes": 919,
       "mode": 420
     },
@@ -6013,14 +6379,14 @@
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__model_restart_confirm_100x30.snap",
-      "sha256": "a336173f5d30c96ea74f98a675823253405c8c2eead5784ebefa7294942f2c18",
-      "bytes": 608,
+      "sha256": "e0104c857cd1a0ce948c0f596157a49dcb137b0d012250e21f04ecd7b37ddbd1",
+      "bytes": 576,
       "mode": 420
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__model_restart_confirm_60x20.snap",
-      "sha256": "3475dab4cb7657a8894a5493433bcd148e5c24a58a59188f17b2de29d88cd9c6",
-      "bytes": 574,
+      "sha256": "7c963918637ba1ee820a85331f9499e6214e77c70929c4912426c5f997f635c8",
+      "bytes": 538,
       "mode": 420
     },
     {
@@ -6037,14 +6403,14 @@
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__palette_100x30.snap",
-      "sha256": "ce42327b797751d410becf4e0934976b5a9ae4b21ed29bd4bbf2c70034499a2f",
-      "bytes": 903,
+      "sha256": "216577f69d5d94e082ed41380909c9be5e3b22da19e761383f8559263226f7fd",
+      "bytes": 953,
       "mode": 420
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__palette_60x20.snap",
-      "sha256": "a461a5b742959dc0ac54493e26badcdd47d937109d294e307052aaf94bfbd4bb",
-      "bytes": 779,
+      "sha256": "440671644badedd5a79ed8563cb2e224bde905553533bd1ae7fef5c3488f5046",
+      "bytes": 791,
       "mode": 420
     },
     {
@@ -6169,14 +6535,14 @@
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__slash_completion_100x30.snap",
-      "sha256": "be62b3d99fa4ebb08ff0edbf9980b50c317c24fadb38944226e3ab9e35d3fae5",
-      "bytes": 1465,
+      "sha256": "c0a0842db4184150a95c166f87eb7f50274a3c7afda49850da7b30a806f1a605",
+      "bytes": 1470,
       "mode": 420
     },
     {
       "path": "harness/src/ui/snapshots/yougori_harness__ui__tests__slash_completion_60x20.snap",
-      "sha256": "43708bd93ed1aad231a1568a41a7f7bbfa1882e39054fdd6e2b3a22a27934bc0",
-      "bytes": 1093,
+      "sha256": "ebfa010cb112a69be55b12c72eebd601fe64d9d35ec8ab566af2f66b85ed7625",
+      "bytes": 1118,
       "mode": 420
     },
     {
@@ -6217,20 +6583,20 @@
     },
     {
       "path": "harness/src/ui/state.rs",
-      "sha256": "0922db667d8e2481e7ddc88ce80622424b2b95acf625614f8e6ed41e77ca2cbd",
-      "bytes": 43354,
+      "sha256": "ac8c2b4ee42fdf6b6f4fd27401810b322403f7e48e593aa3e7ebc5d878d7ec9a",
+      "bytes": 68681,
       "mode": 420
     },
     {
       "path": "harness/src/ui/switcher.rs",
-      "sha256": "a0c50ae50e0249969480d6b5722fd4c4876ca7754cbc543bd88d81c40ea525bf",
-      "bytes": 58007,
+      "sha256": "3ae3236f19304da00ccb68984199fc4d40de12c3d1eb17902b6ce6bc44df6efa",
+      "bytes": 59056,
       "mode": 420
     },
     {
       "path": "harness/src/ui/switcher/tests.rs",
-      "sha256": "84781befd64a16ca3bf467bc251493e97de27de668af3e9c652eccaf7f41dd48",
-      "bytes": 20212,
+      "sha256": "8fb9e354fca16b1c3196fc273c5f2c547f62eb6cb63f820ebf9638875fa4a4f9",
+      "bytes": 21369,
       "mode": 420
     },
     {
@@ -6241,8 +6607,8 @@
     },
     {
       "path": "harness/src/ui/tests.rs",
-      "sha256": "b423baba549ac698ad70517077649c438644b4147eccb8008730b57abc870770",
-      "bytes": 101139,
+      "sha256": "1d5ca3d151acb80ceb2ef5696bfacaeac80c694b07e6540fd0201225e07c270f",
+      "bytes": 123234,
       "mode": 420
     },
     {
@@ -6301,13 +6667,13 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "648dd06d5ea45431884cc1f5bf6ccc5d00b38f7ef708d95173157ae33a9c033c",
+      "sha256": "5a0095d07904a828d46402d59bf8e50a282c778a0c72453fab87064be2caa094",
       "bytes": 193714,
       "mode": 420
     },
     {
       "path": "package.json",
-      "sha256": "832a5ad55fb9852d9c59e2eed95a2872119b77e6997d33c1d2b49cd97fa63edf",
+      "sha256": "4c63d57c255c0493a1e518f5ccdd83c0ad78b3457787ea03093eb7eba7c21750",
       "bytes": 7581,
       "mode": 420
     },
@@ -8017,13 +8383,13 @@
     },
     {
       "path": "setup/Cargo.lock",
-      "sha256": "30b204705c3e490087289cfb6890e4496857657d190161a5bf35fb44c7e47a15",
+      "sha256": "096d8faad9837bc6af675b63cee0bfedf17cbab4f01d18fc8a336652f3c691dd",
       "bytes": 6402,
       "mode": 420
     },
     {
       "path": "setup/Cargo.toml",
-      "sha256": "3f59c984772b252aa0eb552f05f678eeec92a333948ef5106ceceae7ddd7aac5",
+      "sha256": "a7df931f9f7f867b1e82271d886fb269f5d9032f59b58bdf594ba18047cce101",
       "bytes": 366,
       "mode": 420
     },
@@ -8665,13 +9031,13 @@
     },
     {
       "path": "src-tauri/Cargo.lock",
-      "sha256": "69bbadcbbfbcdf44fc2aef14da29c054db37545792bcc13a3df18040786f2419",
+      "sha256": "6f9abfccaffff7ed0e6e5296876bebb73fd8867f9ae9ed3efcca9d22df3990c8",
       "bytes": 199305,
       "mode": 420
     },
     {
       "path": "src-tauri/Cargo.toml",
-      "sha256": "598965ed40dd948f25bb0458b5881fe7a86869db7e1c1820aa6349d3c020b6a9",
+      "sha256": "f4e00933aa6019e5afd671a55fe56714aa7c2678c2fd6232757ea9ffe710d248",
       "bytes": 4757,
       "mode": 420
     },
@@ -20707,7 +21073,7 @@
     },
     {
       "path": "src-tauri/tauri.conf.json",
-      "sha256": "77f5b2cedffdeccaf67d9a652b321bc153d2df937fc6a5db4764730f3bbc2d13",
+      "sha256": "350346bfc04845f8425c02dcb3fa6c6cd9fb18cb2861e1ccd483539ca31da3d2",
       "bytes": 1691,
       "mode": 420
     },
@@ -23563,13 +23929,13 @@
     },
     {
       "path": "vault/Cargo.lock",
-      "sha256": "2d71ee37d6ae68e56f2834bddff3fc53a80186e7994eb183e4ad02a6384945a8",
+      "sha256": "906b8fefa107a974da5e6f4c9b5f822ddafc335e91fddb78ce08e0d05501130c",
       "bytes": 80514,
       "mode": 420
     },
     {
       "path": "vault/Cargo.toml",
-      "sha256": "7a2a23c3bf355af073c12eb1291a35d340353e92f5724988b4e0de5ae184383b",
+      "sha256": "5cd6e317ded09836ea483ad4e1609523199e0ebca6b881b01c3f75f94fb50edd",
       "bytes": 1875,
       "mode": 420
     },

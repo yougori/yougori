@@ -14,6 +14,8 @@ import test_service
 SITE = HERE.parent / "site"
 CATALOG = json.loads((SITE / "harnesses.json").read_text(encoding="utf-8"))
 PACKAGES = json.loads((SITE / "harnesses/packages.json").read_text(encoding="utf-8"))
+# The website's categories (site/categories.json): every harness is in one of them.
+CATEGORY_IDS = [c["id"] for c in json.loads((SITE / "categories.json").read_text(encoding="utf-8"))]
 TYPES = {"text", "choice", "confirm", "folder", "secret", "list", "target"}
 CHECKS = {"url", "host", "target", "path", "text"}
 FIELDS = {"id", "type", "question", "note", "required", "placeholder", "validate", "choices", "default", "must",
@@ -32,12 +34,14 @@ class Catalogue(unittest.TestCase):
         ids = [harness["id"] for harness in CATALOG]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(ids[0], "yougori")
-        # Yougori holds every harness its launcher can start.
-        self.assertEqual(set(ids) - {"yougori"}, set(PACKAGES) - {"yougori"})
+        # Yougori holds every harness its launcher can start, but those not offered (packages.json
+        # "blocked": Claude Code and Strix, which need permission to be passed on).
+        self.assertEqual(set(ids) - {"yougori"}, {name for name, spec in PACKAGES.items() if not spec.get("blocked")} - {"yougori"})
+        self.assertTrue({"claude", "strix"}.isdisjoint(ids))
         for harness in CATALOG:
             for key in ("id", "name", "mark", "category", "interface", "description", "source", "protocol"):
                 self.assertTrue(words(harness[key]), (harness["id"], key))
-            self.assertIn(harness["category"], ("coding", "security"))
+            self.assertIn(harness["category"], CATEGORY_IDS)
             self.assertIsInstance(harness["questions"], list)
             security = harness["category"] == "security"
             self.assertEqual(harness["size"], {"cpu": 4, "memory": 8} if security else {"cpu": 2, "memory": 4}, harness["id"])
@@ -98,7 +102,7 @@ class Catalogue(unittest.TestCase):
 
     def test_security_harnesses_ask_the_owners_questions(self):
         security = [harness for harness in CATALOG if harness["category"] == "security"]
-        self.assertEqual({harness["id"] for harness in security}, {"strix", "shannon", "pentagi", "pentestgpt", "hexstrike"})
+        self.assertEqual({harness["id"] for harness in security}, {"shannon", "pentagi", "pentestgpt", "hexstrike"})
         for harness in security:
             asked = {question["id"]: question for question in harness["questions"]}
             self.assertEqual([question["id"] for question in harness["questions"]], SECURITY, harness["id"])
@@ -164,11 +168,11 @@ class Listing(unittest.TestCase):
                                                 "reason": "The administrator has not published this harness's Sandbox VM image yet."})
 
     def test_the_admin_offers_or_hides_yougori(self):
-        choice = {"home": "harnesses", "harnesses": ["yougori", "strix"]}
+        choice = {"home": "harnesses", "harnesses": ["yougori", "shannon"]}
         status, body, _ = self.flow.call("/api/admin/choices", choice, self.flow.admin)
         self.assertEqual(status, 200, body)
         listed = {harness["id"]: harness for harness in self.flow.call("/api/harnesses")[1]["harnesses"]}
-        self.assertEqual({name for name, harness in listed.items() if harness["offered"]}, {"yougori", "strix"})
+        self.assertEqual({name for name, harness in listed.items() if harness["offered"]}, {"yougori", "shannon"})
         self.assertEqual(self.flow.call("/api/admin/choices", {"home": "harnesses", "harnesses": ["pi"]}, self.flow.admin)[0], 200)
         listed = {harness["id"]: harness for harness in self.flow.call("/api/harnesses")[1]["harnesses"]}
         self.assertFalse(listed["yougori"]["offered"])

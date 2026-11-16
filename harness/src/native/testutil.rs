@@ -125,6 +125,8 @@ pub fn spec(url: &str, cwd: &std::path::Path, state: &std::path::Path) -> crate:
         reach: Default::default(),
         state_dir: state.to_path_buf(),
         session: Default::default(),
+        sign_in: Vec::new(),
+        engine_model: None,
     }
 }
 

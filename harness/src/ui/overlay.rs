@@ -25,6 +25,10 @@ pub enum Action {
     SendCtrlP,
     /// Starts a stopped engine again.
     Restart,
+    /// A new chat (/new); the one before is kept.
+    NewChat,
+    /// The chats kept (/history).
+    History,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +67,10 @@ pub struct Choice {
 pub enum Which {
     Models,
     Modes,
+    /// /history's chats.
+    Chats,
+    /// How to sign in to the plan whose model (this id) was chosen.
+    Plan(String),
 }
 
 pub enum Overlay {

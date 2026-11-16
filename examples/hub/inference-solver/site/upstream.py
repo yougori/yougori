@@ -36,11 +36,28 @@ def address(value):
     return value.rstrip("/")
 
 
-def connect(base, secret, path, payload=None, timeout=30, expect=(200,), method=None):
+def public_address(value):
+    """A person's own API (apis.py): an HTTPS address, any path (Google's OpenAI-compatible one ends
+    in /openai), without credentials, a query or a fragment. Its host must be on the public
+    internet, which connect() checks for each address it connects to."""
+    if not isinstance(value, str) or len(value) > 512 or any(ord(c) < 33 for c in value):
+        raise ValueError("Enter the API's address, such as https://api.example.com/v1.")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Use the API's HTTPS address, without credentials, a query or a fragment.")
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError("The API's port is invalid.") from None
+    return value.rstrip("/")
+
+
+def connect(base, secret, path, payload=None, timeout=30, expect=(200,), method=None, public=False):
     """One request to a model server: GET without a payload, POST with one (or `method`); the
     connection and response, when the status is one of `expect`. A media route's own refusals
-    (400, 404, 409, 410, 429) are raised with their words and code."""
-    parsed = urlsplit(address(base))
+    (400, 404, 409, 410, 429) are raised with their words and code. `public`: a person's own API
+    (public_address), reached only at addresses on the public internet."""
+    parsed = urlsplit(public_address(base) if public else address(base))
     if not isinstance(secret, str) or len(secret) > 1024 or any(ord(c) < 33 or ord(c) > 126 for c in secret):
         raise ValueError("The model API key is invalid.")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -55,8 +72,13 @@ def connect(base, secret, path, payload=None, timeout=30, expect=(200,), method=
                 continue
             if parsed.scheme == "http" and not (inspected.is_private or inspected.is_loopback):
                 continue
+            if public and not inspected.is_global:
+                # Never this website's own computer or network, whoever asks.
+                continue
             candidates.append(item[4][0])
         if not candidates:
+            if public:
+                raise UpstreamError("Use an API on the public internet: private and special network addresses are not allowed.", 400)
             raise UpstreamError("Use HTTPS for a public server; metadata and special network addresses are not allowed.", 400)
         # Connect to the checked address once. TLS still verifies the original hostname.
         conn = http.client.HTTPConnection(parsed.hostname, port, timeout=timeout)

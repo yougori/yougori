@@ -11,6 +11,7 @@ use super::overlay::{Action, Choice, Command, Confirmable, Item, Outcome, Overla
 use super::switcher::{Flow, FlowOutcome, Mode as Where, Pending};
 use super::text::{self, pad, span, truncate_spans, wrap_text};
 use super::theme::{self, clock, Depth, Rgb, Theme, BLUE, GRAY, GREEN, SKY};
+use crate::history::{self, Chat, Listing};
 use crate::spec::EngineSpec;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use portable_pty::{CommandBuilder, PtySize};
@@ -27,17 +28,46 @@ use tokio::sync::mpsc::UnboundedSender;
 /// Rows of the client's output kept for scrolling back.
 const SCROLLBACK: usize = 5000;
 
-/// Each security harness's own pair of colours, from the first to its signature, as its terminal
-/// draws with them (terminal_ui.py BRANDS): its name in the header.
+/// Each harness's own pair of colours, from the first to its signature, as its terminal draws with
+/// them (terminal_ui.py BRANDS): its name in the header. The security harnesses and the harnesses
+/// of Yougori's terminal (agent_kit.py) have one; the others keep the plain bold name.
 pub fn brand(harness: &str) -> Option<(Rgb, Rgb)> {
-    match harness {
-        "hexstrike" => Some((Rgb(0xff, 0x6b, 0x6b), Rgb(0xff, 0xa9, 0x4d))),
-        "pentagi" => Some((Rgb(0xf7, 0x83, 0xac), Rgb(0xb1, 0x97, 0xfc))),
-        "shannon" => Some((Rgb(0x74, 0xc0, 0xfc), Rgb(0x38, 0xd9, 0xa9))),
-        "strix" => Some((Rgb(0xff, 0x92, 0x2b), Rgb(0xff, 0xd4, 0x3b))),
-        "pentestgpt" => Some((Rgb(0x69, 0xdb, 0x7c), Rgb(0x3b, 0xc9, 0xdb))),
-        _ => None,
-    }
+    let hex = |c: u32| Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+    let pair = match harness {
+        "hexstrike" => (0xff6b6b, 0xffa94d),
+        "pentagi" => (0xf783ac, 0xb197fc),
+        "shannon" => (0x74c0fc, 0x38d9a9),
+        "strix" => (0xff922b, 0xffd43b),
+        "pentestgpt" => (0x69db7c, 0x3bc9db),
+        "langgraph" => (0x4dabf7, 0x9775fa),
+        "deepagents" => (0x748ffc, 0x63e6be),
+        "crewai" => (0xff8787, 0xffc078),
+        "smolagents" => (0xffd43b, 0xff922b),
+        "strands" => (0x66d9e8, 0x4dabf7),
+        "adk" => (0x69db7c, 0x4dabf7),
+        "agentframework" => (0x74c0fc, 0xda77f2),
+        "vanna" => (0x9775fa, 0xf783ac),
+        "gptresearcher" => (0x38d9a9, 0x74c0fc),
+        "opendeepresearch" => (0xb197fc, 0x66d9e8),
+        "paperqa" => (0xffa94d, 0xf783ac),
+        "eigent" => (0xda77f2, 0x748ffc),
+        "browseruse" => (0xffa8a8, 0xffd8a8),
+        "pipecat" => (0x63e6be, 0xa9e34b),
+        "finrobot" => (0x8ce99a, 0x66d9e8),
+        "pandasai" => (0xffc078, 0xff8787),
+        "taskweaver" => (0x74c0fc, 0x8ce99a),
+        "tradingagents" => (0xffd43b, 0x69db7c),
+        "chemcrow" => (0x63e6be, 0xda77f2),
+        "deerflow" => (0xffa94d, 0x74c0fc),
+        "biomni" => (0x8ce99a, 0x38d9a9),
+        "openmanus" => (0xf783ac, 0xffd43b),
+        "livekit" => (0xa9e34b, 0x66d9e8),
+        "agenttars" => (0xff8787, 0x748ffc),
+        "stagehand" => (0xffd8a8, 0x63e6be),
+        "geoagent" => (0x69db7c, 0xffd43b),
+        _ => return None,
+    };
+    Some((hex(pair.0), hex(pair.1)))
 }
 
 /// What the client's threads report, tagged with the child they belong to.
@@ -48,7 +78,7 @@ pub enum Message {
 
 /// Answers the client's questions to its terminal (cursor position, device attributes, size,
 /// colours), which the pane's screen cannot answer itself, and keeps what the screen kit of
-/// Yougori's harness clients says of its input line.
+/// Yougori's harness clients says of its input line and of the chat.
 #[derive(Default)]
 pub struct Replies {
     pub out: Vec<u8>,
@@ -56,6 +86,45 @@ pub struct Replies {
     /// `line;text`): Some(true) when it is empty. Only a hint for where `/` starts a command:
     /// whatever the client prints, a command runs only when the person types it.
     pub line: Option<bool>,
+    /// The chat as Yougori's own clients tell it (OSC 7718 `turn;user|assistant;BASE64` and
+    /// `tool;BASE64`), in order, for the history.
+    pub said: Vec<Said>,
+}
+
+/// One thing a client said of the chat (OSC 7718).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Said {
+    User(String),
+    Assistant(String),
+    Tool(String),
+}
+
+/// Standard base64 (with or without padding), as the screen kit writes it; None when it is not.
+pub fn base64_text(data: &[u8]) -> Option<String> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let data: Vec<u8> = data.iter().copied().filter(|c| *c != b'=').collect();
+    if data.len() > 256 * 1024 || data.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(data.len() * 3 / 4);
+    for chunk in data.chunks(4) {
+        let mut acc = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            acc |= value(*c)? << (18 - 6 * i);
+        }
+        let bytes = [(acc >> 16) as u8, (acc >> 8) as u8, acc as u8];
+        out.extend_from_slice(&bytes[..chunk.len() - 1]);
+    }
+    String::from_utf8(out).ok()
 }
 
 impl vt100::Callbacks for Replies {
@@ -98,6 +167,20 @@ impl vt100::Callbacks for Replies {
             [b"11", b"?"] => self.out.extend_from_slice(b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
             [b"7717", b"line", b"empty"] => self.line = Some(true),
             [b"7717", b"line", b"text"] => self.line = Some(false),
+            [b"7718", b"turn", role, data] if self.said.len() < 256 => {
+                if let Some(text) = base64_text(data) {
+                    match *role {
+                        b"user" => self.said.push(Said::User(text)),
+                        b"assistant" => self.said.push(Said::Assistant(text)),
+                        _ => {}
+                    }
+                }
+            }
+            [b"7718", b"tool", data] if self.said.len() < 256 => {
+                if let Some(text) = base64_text(data) {
+                    self.said.push(Said::Tool(text));
+                }
+            }
             _ => {}
         }
     }
@@ -355,6 +438,72 @@ pub enum PaneEffect {
     CancelSwitch,
     Redraw,
     Quit,
+    /// Save the chat on the person's computer (history.rs).
+    Save(Box<Chat>),
+    /// /history: list the chats kept.
+    History,
+    /// Open this chat from /history.
+    Open(String),
+    /// Esc after a sign-in that did not finish: back to the model before it.
+    Back,
+}
+
+/// The variable a client that takes an earlier chat reads (Yougori's own: agent_kit.py): the file
+/// that holds it, written before the client starts. The spec says a client takes one with
+/// YOUGORI_TAKES_CONTEXT.
+pub const CONTEXT_FILE: &str = "YOUGORI_CONTEXT_FILE";
+pub const TAKES_CONTEXT: &str = "YOUGORI_TAKES_CONTEXT";
+
+/// An earlier chat a client takes over when it starts: written to a file for it, compacted to fit
+/// (the model's notes on its oldest part when it does not fit whole).
+pub struct Takeover {
+    pub chat: Chat,
+    pub budget: usize,
+    /// The relay, its key, the model that writes the notes and how long they may be.
+    pub notes: Option<(String, String, String, u32)>,
+    /// How much of the earlier chat the notes request may carry (history::notes_room).
+    pub room: usize,
+    pub file: std::path::PathBuf,
+}
+
+impl Takeover {
+    /// Writes the chat for the client; the file's path, or None when there is nothing to give or
+    /// it could not be written.
+    pub async fn write(self) -> Option<String> {
+        let turns = &self.chat.turns;
+        let mut notes = None;
+        if history::needs_notes(&self.chat, turns, self.budget) {
+            if let Some((base, key, model, most)) = &self.notes {
+                let older = history::newest(turns, self.budget / 2);
+                let text = history::transcript(&turns[..older], &self.chat.screen, self.room);
+                notes = history::summarize(base, key, model, &text, *most).await.ok();
+            }
+        }
+        let context = history::context(&self.chat, turns, self.budget, notes.as_deref())?;
+        let file = self.file;
+        if let Some(parent) = file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let written = {
+            #[cfg(unix)]
+            {
+                use std::io::Write as _;
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&file)
+                    .and_then(|mut out| out.write_all(context.as_bytes()))
+            }
+            #[cfg(not(unix))]
+            {
+                std::fs::write(&file, context.as_bytes())
+            }
+        };
+        written.ok().map(|_| file.to_string_lossy().into_owned())
+    }
 }
 
 pub struct Pane {
@@ -387,15 +536,29 @@ pub struct Pane {
     /// knows (from the keys it sent, and the screen kit's word): None after keys that move in the
     /// line. A `/` opens Yougori's commands unless the line is known to hold something.
     pub typed: Option<usize>,
+    /// The chat as it goes (history.rs): the turns Yougori's own clients tell, or what the
+    /// client's screen showed once the person typed something to it.
+    pub chat: Chat,
+    /// Whether the client running has the chat (it took it over when it started).
+    pub given: bool,
+    /// The person sent the client a line since it started.
+    pub spoke: bool,
+    /// Whether the person's computer keeps the chats (None until a save or a listing says).
+    pub stored: Option<bool>,
+    /// The pane runs a client's sign-in to a plan (ui::SignIn): no chat of its own, no commands of
+    /// Yougori's, and Esc goes back to the model before (`back`: its name, when there is one).
+    pub signing: bool,
+    pub back: Option<String>,
 }
 
 /// Yougori's commands in a terminal pane (name, what it does, what to type after it): the chat's
-/// own, and /new. While the client runs, /exit and /quit are its own (each harness's /exit ends
-/// it its way); once it has ended they quit, as `q` does.
-const PANE_COMMANDS: [(&str, &str, Option<&str>); 6] = [
+/// own, /new and /history. While the client runs, /exit and /quit are its own (each harness's
+/// /exit ends it its way); once it has ended they quit, as `q` does.
+const PANE_COMMANDS: [(&str, &str, Option<&str>); 7] = [
     ("harness", "switch to another harness", Some("name")),
     ("model", "switch model", Some("id")),
-    ("new", "start {name} again, fresh", None),
+    ("new", "start {name} again, fresh (this chat is kept)", None),
+    ("history", "open an earlier chat", None),
     ("help", "commands and keys", None),
     ("exit", "quit Yougori", None),
     ("quit", "quit Yougori", None),
@@ -416,7 +579,14 @@ impl Pane {
     pub fn new(spec: EngineSpec, theme: Theme, masker: Masker, width: u16, height: u16, now: Instant) -> Pane {
         let (rows, cols) = pane_size(width, height);
         let models = if spec.models.is_empty() { vec![spec.model.clone()] } else { spec.models.clone() };
+        let chat = Chat::new(&spec.harness, &spec.name, &spec.model);
         Pane {
+            chat,
+            given: false,
+            spoke: false,
+            stored: None,
+            signing: false,
+            back: None,
             spec,
             theme,
             masker,
@@ -480,6 +650,8 @@ impl Pane {
         self.scrollback = 0;
         self.failed = false;
         self.typed = Some(0);
+        // What the client before showed is in the chat already (saved before it stopped).
+        self.spoke = false;
         self.dirty = true;
     }
 
@@ -492,6 +664,191 @@ impl Pane {
         self.scrollback = 0;
         self.typed = Some(0);
         self.dirty = true;
+    }
+
+    /// The client's whole screen as text: the rows scrolled out of view, then the screen.
+    pub fn screen_text(&mut self) -> String {
+        let screen = self.parser.screen_mut();
+        let at = screen.scrollback();
+        let total = screen.scrollback_len();
+        let (rows, cols) = screen.size();
+        let (rows, cols) = (usize::from(rows.get()), cols.get());
+        let mut lines: Vec<String> = Vec::new();
+        let mut back = total;
+        while back > 0 {
+            screen.set_scrollback(back);
+            let take = back.min(rows);
+            lines.extend(screen.rows(0, cols).take(take));
+            back -= take;
+        }
+        screen.set_scrollback(0);
+        lines.extend(screen.rows(0, cols));
+        screen.set_scrollback(at);
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+        lines.iter().map(|line| line.trim_end()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// What the client said of the chat (OSC 7718) goes into it; a whole reply saves it.
+    fn take_said(&mut self) {
+        let said = std::mem::take(&mut self.parser.callbacks_mut().said);
+        let mut replied = false;
+        for item in said {
+            match item {
+                Said::User(text) => {
+                    self.spoke = true;
+                    self.chat.user(&text);
+                }
+                Said::Assistant(text) => {
+                    self.chat.reply(&text, true);
+                    replied = true;
+                }
+                Said::Tool(title) => self.chat.tool(&title),
+            }
+        }
+        if replied {
+            self.save_chat();
+        }
+    }
+
+    /// Saves the chat when something was said in it: with a client that tells no turns, what its
+    /// screen shows once the person typed to it. Secrets are masked as the screen masks them.
+    pub fn save_chat(&mut self) {
+        if self.signing {
+            return;
+        }
+        if self.chat.turns.is_empty() && self.spoke {
+            let text = self.screen_text();
+            self.chat.set_screen(&text);
+        }
+        if self.chat.is_empty() {
+            return;
+        }
+        self.chat.version += 1;
+        let mut chat = self.chat.clone();
+        let mask = |text: &str| self.masker.mask(text).into_owned();
+        chat.title = mask(&chat.title);
+        chat.screen = mask(&chat.screen);
+        for turn in &mut chat.turns {
+            turn.text = mask(&turn.text);
+            turn.tools = turn.tools.iter().map(|tool| mask(tool)).collect();
+        }
+        self.effects.push(PaneEffect::Save(Box::new(chat)));
+    }
+
+    /// Whether this harness's client takes an earlier chat when it starts (Yougori's own do).
+    pub fn takes_context(&self) -> bool {
+        self.spec.env.get(TAKES_CONTEXT).is_some_and(|value| value == "1")
+    }
+
+    /// The chat for the client about to start, when it has not seen it and takes one: it has it
+    /// from then on.
+    pub fn takeover(&mut self) -> Option<Takeover> {
+        if self.given || self.chat.is_empty() || !self.takes_context() {
+            return None;
+        }
+        self.given = true;
+        let notes = self
+            .spec
+            .models
+            .iter()
+            .find(|model| **model == self.spec.model && !crate::spec::subscribed(model))
+            .or_else(|| self.spec.models.iter().find(|model| !crate::spec::subscribed(model)))
+            .map(|model| (self.spec.base_url.clone(), self.spec.api_key.clone(), model.clone(), self.spec.max_output.min(1536)));
+        // Within the window of the model that writes the notes.
+        let own = notes.as_ref().is_some_and(|(_, _, model, _)| *model == self.spec.model);
+        Some(Takeover {
+            chat: self.chat.clone(),
+            budget: history::budget(self.spec.context_window),
+            notes,
+            room: history::notes_room(self.spec.context_window, self.spec.max_output, own),
+            file: std::path::Path::new(&self.spec.state_dir).join("earlier-chat.md"),
+        })
+    }
+
+    /// A new chat for the client that starts fresh (/new): the one before is kept.
+    pub fn new_chat(&mut self) {
+        self.save_chat();
+        self.chat = Chat::new(&self.spec.harness, &self.spec.name, &self.spec.model);
+        self.given = false;
+        self.spoke = false;
+    }
+
+    /// A save's outcome: whether the person's computer keeps the chats.
+    pub fn saved(&mut self, outcome: Result<bool, String>, now: Instant) {
+        match outcome {
+            Ok(kept) => self.stored = Some(kept),
+            Err(error) => {
+                self.note = Some((format!("This chat could not be saved: {}", text::clean(&error).trim()), now));
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// /history's list came: its panel opens (or what went wrong shows in the status line).
+    pub fn listed(&mut self, listing: Result<Listing, String>, now: Instant) {
+        self.dirty = true;
+        let listing = match listing {
+            Ok(listing) => listing,
+            Err(error) => {
+                self.note = Some((format!("Could not read the chats: {}", text::clean(&error).trim()), now));
+                return;
+            }
+        };
+        self.stored = Some(listing.kept);
+        if listing.chats.is_empty() {
+            self.note = Some(("No chats yet. Each chat is kept once something is said in it.".into(), now));
+            return;
+        }
+        let at = history::now();
+        let choices = listing
+            .chats
+            .iter()
+            .map(|summary| Choice {
+                id: summary.id.clone(),
+                label: if summary.title.trim().is_empty() { "Untitled chat".into() } else { self.masker.mask(&summary.title).into_owned() },
+                hint: history::hint(summary, at),
+                current: summary.id == self.chat.id,
+            })
+            .collect();
+        let title = if listing.kept { "History" } else { "History · kept in this VM only" };
+        self.overlay = Some(Overlay::picker(Which::Chats, title, choices));
+    }
+
+    /// The chat opened from /history came: the client starts again with it (one that cannot take
+    /// it starts fresh, and the chat stays in the history).
+    pub fn opened(&mut self, chat: Result<Chat, String>, now: Instant) {
+        self.dirty = true;
+        let mut chat = match chat {
+            Ok(chat) => chat,
+            Err(error) => {
+                self.note = Some((format!("Could not open the chat: {}", text::clean(&error).trim()), now));
+                return;
+            }
+        };
+        if chat.id == self.chat.id {
+            return;
+        }
+        if !self.switchable() {
+            self.note = Some((format!("Wait until {} has started to open another chat.", self.spec.name), now));
+            return;
+        }
+        self.save_chat();
+        chat.entered(&self.spec.harness, &self.spec.name, &self.spec.model);
+        let title = chat.title.clone();
+        self.chat = chat;
+        self.given = false;
+        self.spoke = false;
+        self.note = Some((
+            if self.takes_context() {
+                format!("Opened “{title}”: {} starts again with it.", self.spec.name)
+            } else {
+                format!("Opened “{title}”: {} starts again on its own; it cannot take an earlier chat.", self.spec.name)
+            },
+            now,
+        ));
+        self.effects.push(PaneEffect::Renew);
     }
 
     /// /new while the client starts or switches: not taken.
@@ -638,11 +995,15 @@ impl Pane {
                 if let Some(empty) = self.parser.callbacks_mut().line.take() {
                     self.typed = if empty { Some(0) } else { Some(self.typed.filter(|n| *n > 0).unwrap_or(1)) };
                 }
+                self.take_said();
                 self.dirty = true;
             }
             Message::Exited(generation, status) if generation == self.generation => {
                 let name = &self.spec.name;
                 let (message, failed) = match status {
+                    // A sign-in says it in few words, so the keys after it fit.
+                    Ok(status) if self.signing && status.success() => ("Signed in.".to_owned(), false),
+                    Ok(_) | Err(_) if self.signing => ("The sign-in did not finish.".to_owned(), true),
                     Ok(status) if status.success() => (format!("{name} ended."), false),
                     Ok(status) => match status.signal() {
                         Some(signal) => (format!("{name} ended: {signal}."), true),
@@ -697,6 +1058,7 @@ impl Pane {
                 hint: "its own shortcut".into(),
                 enabled: self.running(),
             },
+            Item { action: Action::History, label: "History".into(), hint: "earlier chats · /history".into(), enabled: true },
             Item { action: Action::Keys, label: "Keys".into(), hint: "every shortcut".into(), enabled: true },
         ];
         if matches!(self.phase, PanePhase::Ended { .. }) {
@@ -720,7 +1082,8 @@ impl Pane {
             ("/".into(), format!("at the start of a line: Yougori's commands; others go to {name}")),
             ("/harness".into(), "switch to another harness (/harness NAME)".into()),
             ("/model".into(), "switch model (/model ID)".into()),
-            ("/new".into(), format!("start {name} again, fresh")),
+            ("/new".into(), format!("start {name} again, fresh; this chat is kept")),
+            ("/history".into(), "open an earlier chat, from any harness".into()),
             ("/help".into(), "these keys and commands".into()),
             ("ctrl+p".into(), "Yougori's menu: harness, model, keys, quit".into()),
             ("shift+pgup".into(), format!("scroll back through {name}'s output")),
@@ -764,6 +1127,7 @@ impl Pane {
                 None => self.note = Some((format!("There is no model {argument} here. /model lists them."), now)),
             },
             "new" => self.renew(now),
+            "history" => self.effects.push(PaneEffect::History),
             "help" => self.overlay = Some(Overlay::Keys { keys: self.keys_help(), scroll: 0 }),
             "exit" | "quit" => self.request_quit(),
             _ => {}
@@ -780,11 +1144,14 @@ impl Pane {
                 self.overlay = Some(Overlay::Confirm {
                     what: Confirmable::Renew,
                     title: format!("Start {name} again?"),
-                    detail: format!("{name} stops and starts fresh; what it shows now goes."),
+                    detail: format!("{name} stops and starts fresh; this chat is kept in /history."),
                     yes: "start again".into(),
                 });
             }
-            PanePhase::Ended { .. } => self.effects.push(PaneEffect::Start),
+            PanePhase::Ended { .. } => {
+                self.new_chat();
+                self.effects.push(PaneEffect::Start);
+            }
             _ => self.wait_to_renew(now),
         }
     }
@@ -837,7 +1204,14 @@ impl Pane {
             }
             Outcome::Confirmed(Confirmable::Renew) => {
                 self.overlay = None;
+                self.new_chat();
                 self.effects.push(PaneEffect::Renew);
+            }
+            Outcome::Pick(Which::Chats, id) => {
+                self.overlay = None;
+                if id != self.chat.id {
+                    self.effects.push(PaneEffect::Open(id));
+                }
             }
             Outcome::Run(action) => {
                 self.overlay = None;
@@ -864,6 +1238,8 @@ impl Pane {
                     Action::Keys => self.overlay = Some(Overlay::Keys { keys: self.keys_help(), scroll: 0 }),
                     Action::Restart => self.effects.push(PaneEffect::Start),
                     Action::Quit => self.request_quit(),
+                    Action::NewChat => self.renew(now),
+                    Action::History => self.effects.push(PaneEffect::History),
                     Action::Mode | Action::Slash(_) | Action::Details => {}
                 }
             }
@@ -889,7 +1265,7 @@ impl Pane {
                     self.effects.push(PaneEffect::Restart(model));
                 }
             }
-            Outcome::Pick(Which::Modes, _) => self.overlay = None,
+            Outcome::Pick(Which::Modes | Which::Plan(_), _) => self.overlay = None,
             Outcome::Confirmed(Confirmable::Quit) => {
                 self.overlay = None;
                 self.effects.push(PaneEffect::Quit);
@@ -955,12 +1331,13 @@ impl Pane {
             _ => {}
         }
         let alt = key.modifiers.contains(KeyModifiers::ALT);
-        if key.code == KeyCode::Char('/') && !control && !alt && self.command_starts() {
+        if key.code == KeyCode::Char('/') && !control && !alt && !self.signing && self.command_starts() {
             self.overlay = Some(Overlay::command(self.commands(), &self.spec.name));
             return;
         }
         if let PanePhase::Ended { .. } = self.phase {
             match key.code {
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc if self.signing => self.effects.push(PaneEffect::Back),
                 KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.effects.push(PaneEffect::Quit),
                 KeyCode::Char('c') if control => self.effects.push(PaneEffect::Quit),
                 KeyCode::Enter => self.effects.push(PaneEffect::Start),
@@ -971,6 +1348,10 @@ impl Pane {
         if control && key.code == KeyCode::Char('l') {
             // Paint the whole screen again; the client gets Ctrl+L too and redraws its own.
             self.effects.push(PaneEffect::Redraw);
+        }
+        if key.code == KeyCode::Enter && self.child.is_some() && self.typed != Some(0) {
+            // A line sent to the client: what its screen shows from now is part of the chat.
+            self.spoke = true;
         }
         if let Some(child) = &self.child {
             let application_cursor = self.parser.screen().application_cursor();
@@ -1081,7 +1462,7 @@ impl Pane {
             None => left.push(span(name, theme.bold())),
         }
         left.push(span(" · ", theme.muted()));
-        left.push(span(self.masker.mask(&self.spec.model).into_owned(), theme.muted()));
+        left.push(span(self.masker.mask(&crate::spec::shown_model(&self.spec.model)).into_owned(), theme.muted()));
         if let Some(target) = self.target_words() {
             left.push(span(" · target ", theme.muted()));
             left.push(span(self.masker.mask(&target).into_owned(), Style::default()));
@@ -1202,7 +1583,13 @@ impl Pane {
                     span(if *failed { "■ " } else { "◇ " }, if *failed { theme.bad() } else { theme.good() }),
                     span(self.masker.mask(message).into_owned(), Style::default()),
                 ];
-                keys(&mut spans, &[("q", "quit"), ("enter", "start again"), ("/", "commands"), ("ctrl+p", "menu")]);
+                if self.signing {
+                    let back = self.back.as_deref().map(crate::spec::shown_model).unwrap_or_else(|| "quit".into());
+                    let back = if self.back.is_some() { format!("back to {back}") } else { back };
+                    keys(&mut spans, &[("enter", "sign in again"), ("esc", &back)]);
+                } else {
+                    keys(&mut spans, &[("q", "quit"), ("enter", "start again"), ("/", "commands"), ("ctrl+p", "menu")]);
+                }
                 spans
             }
             _ => {
@@ -1217,6 +1604,15 @@ impl Pane {
                 } else if let PanePhase::Changing { .. } = self.phase {
                     spans.push(span(" · switching harness", theme.muted()));
                     keys(&mut spans, &[("esc", "to stop")]);
+                } else if self.signing {
+                    // A Claude sign-in stays in the VM; a ChatGPT one Yougori keeps for next time.
+                    let kept = crate::spec::plan_of(&self.spec.model).is_some_and(|(plan, _)| plan.transferable);
+                    let words = if kept {
+                        " · sign in as the client says; Yougori keeps the sign-in on your computer for next time"
+                    } else {
+                        " · sign in as the client says; the sign-in stays in this VM"
+                    };
+                    spans.push(span(words, theme.muted()));
                 } else {
                     keys(&mut spans, &[("/", "commands"), ("ctrl+p", "menu"), ("shift+pgup", "scroll back")]);
                 }

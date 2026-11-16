@@ -250,128 +250,6 @@
     }
   },
   {
-    "id": "strix",
-    "name": "Strix",
-    "mark": "SX",
-    "category": "security",
-    "interface": "Terminal",
-    "description": "Security testing and remediation for authorized applications.",
-    "source": "https://github.com/usestrix/strix",
-    "protocol": "custom",
-    "questions": [
-      {
-        "id": "target",
-        "type": "target",
-        "question": "What should it test?",
-        "note": "The practice app is deliberately vulnerable and runs inside the VM, so it is safe to try.",
-        "required": true,
-        "placeholder": "https://staging.mycompany.com",
-        "validate": "target",
-        "reach": "targets",
-        "choices": [
-          {
-            "value": "practice",
-            "label": "A practice app inside the VM",
-            "note": "a deliberately vulnerable app Yougori starts inside the VM, safe to try"
-          },
-          {
-            "value": "address",
-            "label": "A website or address I give",
-            "note": "http(s) URLs, host:port or IPv4 addresses, separated by commas"
-          }
-        ]
-      },
-      {
-        "id": "permission",
-        "type": "confirm",
-        "question": "Do you own this target or have written permission to test it?",
-        "note": "Testing a system without its owner's permission is illegal in most places.",
-        "required": true,
-        "must": true,
-        "refusal": "Yougori tests only targets you own or have written permission to test. Nothing was started.",
-        "when": {
-          "id": "target",
-          "not": "practice"
-        }
-      },
-      {
-        "id": "off_limits",
-        "type": "list",
-        "question": "What is off limits?",
-        "note": "Paths or hosts it must not touch, separated by commas.",
-        "required": false,
-        "placeholder": "/billing, payments.mycompany.com",
-        "validate": "text"
-      },
-      {
-        "id": "depth",
-        "type": "choice",
-        "question": "How far may it go?",
-        "required": true,
-        "default": "safe",
-        "choices": [
-          {
-            "value": "look",
-            "label": "Look only",
-            "note": "maps the target and reads its pages; sends no attacks"
-          },
-          {
-            "value": "safe",
-            "label": "Test safely",
-            "note": "tries attacks that change and break nothing"
-          },
-          {
-            "value": "full",
-            "label": "Full exploitation",
-            "note": "exploits what it finds to prove it; may change data"
-          }
-        ]
-      },
-      {
-        "id": "login_user",
-        "type": "text",
-        "question": "Login for the test?",
-        "note": "A test account's user name or email, to test behind the sign-in.",
-        "required": false,
-        "placeholder": "test@mycompany.com",
-        "validate": "text"
-      },
-      {
-        "id": "login_password",
-        "type": "secret",
-        "question": "Password for that login?",
-        "note": "It never goes into files, logs or the report.",
-        "required": true,
-        "when": {
-          "id": "login_user",
-          "present": true
-        }
-      },
-      {
-        "id": "source",
-        "type": "folder",
-        "question": "Source code?",
-        "note": "A copy goes into the VM as its workspace, so the test can read the code.",
-        "required": false,
-        "validate": "path",
-        "workspace": true
-      },
-      {
-        "id": "focus",
-        "type": "text",
-        "question": "Focus?",
-        "note": "What matters most.",
-        "required": false,
-        "placeholder": "Login and payments",
-        "validate": "text"
-      }
-    ],
-    "size": {
-      "cpu": 4,
-      "memory": 8
-    }
-  },
-  {
     "id": "shannon",
     "name": "Shannon",
     "mark": "SH",
@@ -860,14 +738,459 @@
     }
   },
   {
-    "id": "claude",
-    "name": "Claude Code",
-    "mark": "CC",
+    "id": "langgraph",
+    "name": "LangGraph",
+    "mark": "LG",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "Stateful agent graphs: a model node and a tool node, checkpointed between turns.",
+    "source": "https://github.com/langchain-ai/langgraph",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "deepagents",
+    "name": "Deep Agents",
+    "mark": "DA",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "An agent harness for long tasks: planning, file tools and subagents.",
+    "source": "https://github.com/langchain-ai/deepagents",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "crewai",
+    "name": "CrewAI",
+    "mark": "CR",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "Coordinated agents: a specialist does the task and a reviewer checks it.",
+    "source": "https://github.com/crewAIInc/crewAI",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "smolagents",
+    "name": "smolagents",
+    "mark": "SM",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "Agents that act by writing Python, step after step.",
+    "source": "https://github.com/huggingface/smolagents",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "strands",
+    "name": "Strands Agents",
+    "mark": "ST",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "A model-driven agent loop: the model plans and calls tools.",
+    "source": "https://github.com/strands-agents/sdk-python",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "adk",
+    "name": "Google ADK",
+    "mark": "AK",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "Google's Agent Development Kit: an LLM agent on ADK's runner.",
+    "source": "https://github.com/google/adk-python",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "agentframework",
+    "name": "Microsoft Agent Framework",
+    "mark": "MA",
+    "category": "agents",
+    "interface": "Terminal",
+    "description": "Microsoft's framework for enterprise agents and orchestration.",
+    "source": "https://github.com/microsoft/agent-framework",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "mini",
+    "name": "mini-SWE-agent",
+    "mark": "MS",
     "category": "coding",
     "interface": "Terminal",
-    "description": "Anthropic's official coding client.",
-    "source": "https://code.claude.com/docs/en/overview",
-    "protocol": "messages",
+    "description": "A small software engineering agent that works through the shell, in its own terminal.",
+    "source": "https://github.com/SWE-agent/mini-swe-agent",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "holmes",
+    "name": "HolmesGPT",
+    "mark": "HG",
+    "category": "operations",
+    "interface": "Terminal",
+    "description": "Troubleshooting for operations and incident response, asking before each command.",
+    "source": "https://github.com/HolmesGPT/holmesgpt",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "vanna",
+    "name": "Vanna",
+    "mark": "VN",
+    "category": "data",
+    "interface": "Terminal",
+    "description": "Questions in words answered with SQL from a SQLite database or CSV files in your folder.",
+    "source": "https://github.com/vanna-ai/vanna",
+    "protocol": "chat_completions",
+    "questions": [
+      {
+        "id": "database",
+        "type": "text",
+        "question": "Which database should Vanna ask?",
+        "note": "A SQLite file in your folder. Leave it empty to use the folder's first database, or its CSV files.",
+        "required": false,
+        "placeholder": "data/sales.sqlite",
+        "validate": "path"
+      }
+    ],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "gptresearcher",
+    "name": "GPT Researcher",
+    "mark": "GR",
+    "category": "research",
+    "interface": "Terminal",
+    "description": "Research reports with sources, from the web or the documents in your folder.",
+    "source": "https://github.com/assafelovic/gpt-researcher",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "opendeepresearch",
+    "name": "Open Deep Research",
+    "mark": "OD",
+    "category": "research",
+    "interface": "Terminal",
+    "description": "Deep research: a supervisor and parallel researchers write one report.",
+    "source": "https://github.com/langchain-ai/open_deep_research",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "paperqa",
+    "name": "PaperQA2",
+    "mark": "PQ",
+    "category": "research",
+    "interface": "Terminal",
+    "description": "Answers from the papers and documents in your folder, citing the passages.",
+    "source": "https://github.com/Future-House/paper-qa",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "tradingagents",
+    "name": "TradingAgents",
+    "mark": "TA",
+    "category": "finance",
+    "interface": "Terminal",
+    "description": "A firm of agents analyses a stock: analysts, a bull and bear debate, a trader and a risk team. Research, not advice. Its market data comes from Yahoo Finance, whose terms allow personal use only.",
+    "source": "https://github.com/TauricResearch/TradingAgents",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "pipecat",
+    "name": "Pipecat",
+    "mark": "PC",
+    "category": "service",
+    "interface": "Terminal",
+    "description": "A customer-service conversation on Pipecat's pipeline, answering from your company's documents.",
+    "source": "https://github.com/pipecat-ai/pipecat",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "eigent",
+    "name": "Eigent",
+    "mark": "EG",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "A workforce of agents for desk work: a coordinator, Developer, Document and Search workers.",
+    "source": "https://github.com/eigent-ai/eigent",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "browseruse",
+    "name": "Browser Use",
+    "mark": "BU",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "Browser tasks done by an agent in a headless Chromium inside the VM.",
+    "source": "https://github.com/browser-use/browser-use",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "taskweaver",
+    "name": "TaskWeaver",
+    "mark": "TW",
+    "category": "data",
+    "interface": "Terminal",
+    "description": "Code-first data analysis: a planner and a code interpreter on a local Python kernel.",
+    "source": "https://github.com/microsoft/TaskWeaver",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "continue",
+    "name": "Continue",
+    "mark": "CN",
+    "category": "coding",
+    "interface": "Terminal",
+    "description": "Continue's coding assistant in its own terminal (cn), on your inference's model.",
+    "source": "https://github.com/continuedev/continue",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "pandasai",
+    "name": "PandasAI",
+    "mark": "PA",
+    "category": "data",
+    "interface": "Terminal",
+    "description": "Chat with your data: questions about the CSV and Excel files in your folder become pandas code.",
+    "source": "https://github.com/sinaptik-ai/pandas-ai",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "geoagent",
+    "name": "GeoAgent",
+    "mark": "GE",
+    "category": "science",
+    "interface": "Terminal",
+    "description": "Geospatial analysis and maps: GeoAgent's leafmap tools, the map saved for your browser.",
+    "source": "https://github.com/opengeos/GeoAgent",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "chemcrow",
+    "name": "ChemCrow",
+    "mark": "CC",
+    "category": "science",
+    "interface": "Terminal",
+    "description": "Chemistry questions answered with RDKit and chemistry tools by ChemCrow's agent.",
+    "source": "https://github.com/ur-whitelab/chemcrow-public",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "openclaw",
+    "name": "OpenClaw",
+    "mark": "OC",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "OpenClaw's personal assistant in its own terminal, for everyday admin and connected-tool tasks.",
+    "source": "https://github.com/openclaw/openclaw",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "deerflow",
+    "name": "DeerFlow",
+    "mark": "DF",
+    "category": "research",
+    "interface": "Terminal",
+    "description": "Deep research by a team of agents: planner, researchers, coder and reporter.",
+    "source": "https://github.com/bytedance/deer-flow",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "biomni",
+    "name": "Biomni",
+    "mark": "BM",
+    "category": "science",
+    "interface": "Terminal",
+    "description": "A biomedical research agent that plans, writes and runs code, in commercial mode.",
+    "source": "https://github.com/snap-stanford/Biomni",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "openmanus",
+    "name": "OpenManus",
+    "mark": "OM",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "A general agent for everyday tasks, with Python, a file editor and a browser.",
+    "source": "https://github.com/FoundationAgents/OpenManus",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "finrobot",
+    "name": "FinRobot",
+    "mark": "FR",
+    "category": "finance",
+    "interface": "Terminal",
+    "description": "Financial analysis by FinRobot's Market Analyst on live market data. Research, not advice. Its market data comes from Yahoo Finance, whose terms allow personal use only.",
+    "source": "https://github.com/AI4Finance-Foundation/FinRobot",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "livekit",
+    "name": "LiveKit Agents",
+    "mark": "LK",
+    "category": "service",
+    "interface": "Terminal",
+    "description": "A contact-centre voice agent's session, in text, answering callers from your documents.",
+    "source": "https://github.com/livekit/agents",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "agenttars",
+    "name": "Agent TARS",
+    "mark": "AT",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "ByteDance's multimodal agent for browser and computer tasks, run headless in the VM.",
+    "source": "https://github.com/bytedance/UI-TARS-desktop",
+    "protocol": "chat_completions",
+    "questions": [],
+    "size": {
+      "cpu": 2,
+      "memory": 4
+    }
+  },
+  {
+    "id": "stagehand",
+    "name": "Stagehand",
+    "mark": "SH",
+    "category": "office",
+    "interface": "Terminal",
+    "description": "Browser automation in words: Stagehand acts, observes and extracts on a local Chromium.",
+    "source": "https://github.com/browserbase/stagehand",
+    "protocol": "chat_completions",
     "questions": [],
     "size": {
       "cpu": 2,

@@ -60,6 +60,98 @@ SWITCH_MODES = ("in-place", "new-vm")
 SESSION_FIELDS = ("harnesses", "vm_base", "vm_memory", "server")
 SESSION_BYTES = 96 * 1024
 BUSY = "Another harness switch is under way."
+# The person's chats (the screen's /history, harness/src/history.rs). The screen saves each one here
+# with the session's token; the launcher takes them from /poll and keeps them on the person's
+# computer. It says at /start that it keeps them ("history"), with the chat to go on with when a
+# /harness switch into a new VM brought one ("resume"), then sends the list it keeps
+# (/history/index). A chat kept there and not in this VM is asked of it when the screen opens it
+# (/history/open; the launcher answers with /history/body).
+CHAT_ID = re.compile(r"[a-f0-9]{32}")
+CHAT_BYTES = 2 * 1024 * 1024
+HISTORY_KEPT = 2000
+HISTORY_IN_VM = 200
+OPEN_SECONDS = 30
+PACKET_HISTORY = 2 * 1024 * 1024
+NOT_KEPT = "That chat is not kept on this computer."
+
+
+def valid_chat(chat):
+    """A chat as the screen saves it: its id, at most CHAT_BYTES of JSON, its turns each a prompt or
+    a reply with its text."""
+    if not isinstance(chat, dict) or not isinstance(chat.get("id"), str) or not CHAT_ID.fullmatch(chat["id"]):
+        return False
+    try:
+        size = len(json.dumps(chat))
+    except (TypeError, ValueError):
+        return False
+    turns = chat.get("turns", [])
+    return (size <= CHAT_BYTES and bounded(chat.get("title", ""), 400) and isinstance(turns, list) and len(turns) <= 5000
+            and all(isinstance(turn, dict) and turn.get("role") in ("user", "assistant") and isinstance(turn.get("text", ""), str)
+                    for turn in turns)
+            and type(chat.get("updated", 0)) is int and type(chat.get("version", 0)) is int)
+
+
+def chat_summary(chat):
+    """A chat as /history lists it."""
+    names = [name for name in chat.get("harnesses") or [] if isinstance(name, str)][:32]
+    return {"id": chat["id"], "title": chat.get("title") or "", "updated": chat.get("updated", 0),
+            "name": chat.get("name") if isinstance(chat.get("name"), str) else "", "harnesses": names,
+            "model": chat.get("model") if isinstance(chat.get("model"), str) else "", "turns": len(chat.get("turns") or [])}
+
+
+def valid_summary(item):
+    return (isinstance(item, dict) and isinstance(item.get("id"), str) and CHAT_ID.fullmatch(item["id"])
+            and bounded(item.get("title", ""), 400) and type(item.get("updated", 0)) is int and bounded(item.get("name", ""), 80)
+            and isinstance(item.get("harnesses", []), list) and len(item.get("harnesses", [])) <= 32
+            and all(bounded(name, 80) for name in item.get("harnesses", [])) and bounded(item.get("model", ""), 1024)
+            and type(item.get("turns", 0)) is int)
+
+
+def resumed(data):
+    """The chat a /start's session goes on with (its "history" "resume"), when it names one."""
+    history = data.get("history")
+    resume = history.get("resume") if isinstance(history, dict) else None
+    return resume if isinstance(resume, str) and CHAT_ID.fullmatch(resume) else None
+
+
+# A person's own plans (profiles.SUBSCRIPTIONS): the screen asks for one when the person chooses it
+# (/subscription, with the session's token, and how to sign in: `use`). The launcher takes the
+# request from /poll, decides the plan's sites itself and answers with /subscription/granted: this
+# VM's proxy for chosen sites then opens to them, and, for a ChatGPT plan, the sign-in it sends (from
+# the person's computer, or kept from an earlier sign-in) goes into Codex's own file; a sign-in Codex
+# makes or renews there goes back to the launcher (/poll "credentials"), which keeps it. A Claude
+# sign-in never travels (TRANSFERABLE).
+PLANS = {"claude": ".claude/.credentials.json", "chatgpt": ".codex/auth.json"}
+USES = ("vm", "saved", "computer", "sign-in")
+# The plans whose sign-in may travel between the person's computer and a VM. OpenAI documents
+# copying Codex's auth.json to another machine. Anthropic lets no third party collect, store or pass
+# on Claude credentials: a Claude sign-in completes in Claude Code's own sign-in in this VM, and is
+# never sent here nor taken from here.
+TRANSFERABLE = ("chatgpt",)
+ONLY_HERE = "A Claude sign-in completes in Claude Code's own sign-in, in this VM: choose Sign in."
+CREDENTIAL_BYTES = 64 * 1024
+GRANT_SECONDS = 60
+
+
+def subscriptions_told(data):
+    """What the launcher says of each plan's sign-ins on the person's computer (/start
+    "subscriptions"): {plan: {"saved": bool, "computer": bool}}, checked; {} when it says nothing."""
+    told = data.get("subscriptions")
+    if not isinstance(told, dict):
+        return {}
+    # A plan whose sign-in may not travel (Claude) is never offered from the computer.
+    return {plan: {"saved": state.get("saved") is True, "computer": state.get("computer") is True}
+            for plan, state in told.items() if plan in TRANSFERABLE and isinstance(state, dict)}
+
+
+def credential(text):
+    """A sign-in as a client keeps it: a JSON object of at most CREDENTIAL_BYTES."""
+    if not isinstance(text, str) or len(text) > CREDENTIAL_BYTES:
+        return False
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
 
 
 class Refusal(ValueError):
@@ -141,6 +233,11 @@ def valid_secrets(secrets):
         and value and "\n" not in value and "\r" not in value for key, value in secrets.items())
 
 
+# The kinds of work an entry may name (the website's categories, site/categories.json): the screen
+# names them in its harness list. A launcher from before them gives none.
+KINDS = ("coding", "agents", "security", "operations", "data", "research", "office", "service", "finance", "science")
+
+
 def session_fields(data):
     """What a Yougori harness session's launcher tells it about switching harness (SESSION_FIELDS),
     checked; {} from a launcher that tells nothing (switching is then not offered). The list's
@@ -152,6 +249,7 @@ def session_fields(data):
     def entry(item):
         return (isinstance(item, dict) and isinstance(item.get("id"), str) and HARNESS.fullmatch(item["id"])
                 and bounded(item.get("name"), 80) and item.get("category") in ("coding", "security")
+                and item.get("kind", "coding") in KINDS
                 and bounded(item.get("description", ""), 600) and isinstance(item.get("questions", []), list)
                 and len(item.get("questions", [])) <= 32 and isinstance(item.get("base"), str) and HARNESS.fullmatch(item["base"])
                 and type(item.get("memory")) is int and 0 < item["memory"] <= 1024 and isinstance(item.get("ready"), bool)
@@ -202,7 +300,11 @@ def harness_session(data, image, environment, home=HOME, token=None):
     os.chmod(folder, 0o700)
     private_json(folder, "answers.json", answers)
     if fields and token:
-        private_json(folder, "session.json", fields)
+        # The chat a switch into this new VM brought: the screen opens it when it starts. And what
+        # the person's computer holds of each plan's sign-in, which the screen offers.
+        resume, plans = resumed(data), subscriptions_told(data)
+        private_json(folder, "session.json", {**fields, **({"resume": resume} if resume else {}),
+                                              **({"subscriptions": plans} if plans else {})})
         environment[SWITCH_TOKEN] = token
     else:
         (folder / "session.json").unlink(missing_ok=True)
@@ -314,6 +416,215 @@ class State:
         self.token = tokens.token_urlsafe(32)
         self.switchable = set()
         self.switch = None
+        # The person's chats: whether the launcher keeps them, the list it keeps, the ones the screen
+        # saved in this VM, those waiting for the launcher, and the opens asked of it (an id: None
+        # while asked, then the chat, or False when it has none).
+        self.history_kept = False
+        self.history_index = {}
+        self.history_chats = {}
+        self.history_out = collections.OrderedDict()
+        self.history_asked = {}
+        self.history_ask = collections.deque()
+        # A person's plans: the request under way, and each plan's sign-in file the launcher keeps
+        # up to date (plan: (path, its last change, as last told)).
+        self.subscription = None
+        self.watched = {}
+
+    # ---- a person's plans (a subscription chosen in the screen)
+
+    def subscribe(self, data):
+        """The screen asks for a plan: the launcher opens its sites and sends the sign-in to use.
+        Waits for its answer (GRANT_SECONDS at most). The sites, and whether the client is signed in."""
+        plan, use = data.get("plan"), data.get("use")
+        if plan not in PLANS or use not in USES:
+            raise ValueError("Invalid plan.")
+        if plan not in TRANSFERABLE and use in ("saved", "computer"):
+            raise ValueError(ONLY_HERE)
+        with self.lock:
+            if not self.started or self.exit_code is not None:
+                raise ValueError("This VM has no harness session.")
+            if self.subscription is not None and self.subscription["state"] in ("waiting", "working"):
+                raise Refusal("Another plan is being set up.")
+            record = {"id": uuid.uuid4().hex, "plan": plan, "use": use, "state": "waiting", "reason": "", "sites": []}
+            self.subscription = record
+            self.lock.notify_all()
+            self.lock.wait_for(lambda: record["state"] in ("done", "failed"), timeout=GRANT_SECONDS)
+            if record["state"] != "done":
+                if record["state"] != "failed":
+                    record.update(state="failed", reason="The launcher did not answer.")
+                raise Refusal(record["reason"] or "The plan could not be set up.")
+            return {"sites": record["sites"], "signed_in": self.signed_in(plan)}
+
+    def signed_in(self, plan):
+        try:
+            return (self.home / PLANS[plan]).stat().st_size > 2
+        except OSError:
+            return False
+
+    def subscription_take(self):
+        """The plan request for the launcher, once (in /poll, the lock held)."""
+        record = self.subscription
+        if record is None or record["state"] != "waiting":
+            return None
+        record["state"] = "working"
+        return {name: record[name] for name in ("id", "plan", "use")}
+
+    def subscription_granted(self, data):
+        """The launcher's answer: the plan's sites, which this VM's proxy opens to (it starts now
+        when the session had none), and the sign-in to put in the client's file, when it sent one."""
+        sites = data.get("sites")
+        given = data.get("credential")
+        with self.lock:
+            record = self.subscription
+            if record is None or record["state"] != "working" or data.get("id") != record["id"]:
+                raise ValueError("No such plan request.")
+            chosen = chosen_sites(sites)
+            if given is not None and (not credential(given) or record["plan"] not in TRANSFERABLE):
+                raise ValueError("Invalid sign-in.")
+            if self.tunnels is None:
+                self.tunnels = GuestTunnels(chosen, self.lock, {})
+                serve_proxy(self.tunnels)
+            else:
+                self.tunnels.sites.extend(site for site in chosen if site not in self.tunnels.sites)
+            path = self.home / PLANS[record["plan"]]
+            if given is not None:
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                private_json(path.parent, path.name, json.loads(given))
+            elif record["use"] == "sign-in":
+                # Signing in again (another account, perhaps): the sign-in this VM holds goes, so the
+                # client asks for a new one. It came from the person's computer or Yougori's copy.
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            if record["plan"] in TRANSFERABLE:
+                # A sign-in the client makes or renews goes back to the launcher, which keeps it.
+                self.watched[record["plan"]] = (path, self.changed(path) if given is not None else None)
+            record.update(state="done", sites=chosen)
+            self.lock.notify_all()
+        return {}
+
+    def subscription_failed(self, data):
+        with self.lock:
+            record = self.subscription
+            if record is None or record["state"] != "working" or data.get("id") != record["id"]:
+                raise ValueError("No such plan request.")
+            reason = data.get("reason")
+            words = "".join(c for c in reason if not (ord(c) < 32 or 127 <= ord(c) <= 159))[:300] if isinstance(reason, str) else ""
+            record.update(state="failed", reason=words or "The plan could not be set up.")
+            self.lock.notify_all()
+        return {}
+
+    @staticmethod
+    def changed(path):
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def credentials_take(self):
+        """The sign-ins a client made or renewed since last told (in /poll, the lock held)."""
+        found = []
+        for plan, (path, told) in list(self.watched.items()):
+            now = self.changed(path)
+            if now is None or now == told:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            self.watched[plan] = (path, now)
+            if credential(text):
+                found.append({"plan": plan, "text": text})
+        return found
+
+    # ---- the person's chats (/history in the screen)
+
+    def history_save(self, data):
+        """The screen saves a chat: kept in this VM, and for the launcher when it keeps chats. The
+        newest save of a chat wins (its version)."""
+        chat = data.get("chat")
+        if not valid_chat(chat):
+            raise ValueError("Invalid chat.")
+        with self.lock:
+            kept = self.history_chats.get(chat["id"])
+            if kept is None or kept.get("version", 0) <= chat.get("version", 0):
+                self.history_chats[chat["id"]] = chat
+                if len(self.history_chats) > HISTORY_IN_VM:
+                    oldest = min(self.history_chats.values(), key=lambda item: item.get("updated", 0))
+                    self.history_chats.pop(oldest["id"], None)
+                if self.history_kept:
+                    self.history_out[chat["id"]] = chat
+                    self.history_out.move_to_end(chat["id"])
+                    self.lock.notify_all()
+            return {"saved": True, "kept": self.history_kept}
+
+    def history_list(self):
+        """The chats to list, newest first: the launcher's and this VM's."""
+        with self.lock:
+            merged = dict(self.history_index)
+            for chat in self.history_chats.values():
+                merged[chat["id"]] = chat_summary(chat)
+            chats = sorted(merged.values(), key=lambda item: item.get("updated", 0), reverse=True)[:500]
+            return {"chats": chats, "kept": self.history_kept}
+
+    def history_open(self, data):
+        """One chat, whole: this VM's, or asked of the launcher (OPEN_SECONDS at most)."""
+        identity = data.get("id")
+        if not isinstance(identity, str) or not CHAT_ID.fullmatch(identity):
+            raise ValueError("Invalid chat.")
+        with self.lock:
+            if identity in self.history_chats:
+                return {"chat": self.history_chats[identity]}
+            if not self.history_kept:
+                raise LookupError(NOT_KEPT)
+            if identity not in self.history_asked:
+                self.history_asked[identity] = None
+                self.history_ask.append(identity)
+                self.lock.notify_all()
+            self.lock.wait_for(lambda: self.history_asked.get(identity) is not None, timeout=OPEN_SECONDS)
+            found = self.history_asked.pop(identity, None)
+        if not isinstance(found, dict):
+            raise LookupError(NOT_KEPT)
+        return {"chat": found}
+
+    def history_answer(self, data):
+        """The launcher's answer to an open: the chat, or `missing`."""
+        identity = data.get("id")
+        with self.lock:
+            if not isinstance(identity, str) or identity not in self.history_asked:
+                raise ValueError("No such chat was asked for.")
+            chat = data.get("chat")
+            self.history_asked[identity] = chat if valid_chat(chat) and chat["id"] == identity else False
+            self.lock.notify_all()
+        return {}
+
+    def history_listed(self, data):
+        """The chats the launcher keeps, as /history lists them."""
+        index = data.get("index")
+        if not isinstance(index, list) or len(index) > HISTORY_KEPT or not all(valid_summary(item) for item in index):
+            raise ValueError("Invalid chat list.")
+        with self.lock:
+            self.history_kept = True
+            self.history_index = {item["id"]: item for item in index}
+        return {}
+
+    def history_take(self):
+        """What /poll hands the launcher (the lock held): chats to keep, at most PACKET_HISTORY of
+        them at once, and the chats the screen asked to open."""
+        chats, size = [], 0
+        while self.history_out:
+            identity, chat = next(iter(self.history_out.items()))
+            cost = len(json.dumps(chat))
+            if chats and size + cost > PACKET_HISTORY:
+                break
+            self.history_out.popitem(last=False)
+            chats.append(chat)
+            size += cost
+        asked = list(self.history_ask)
+        self.history_ask.clear()
+        return chats, asked
 
     def command(self, data, environment):
         """runtime.py's command for a /start, with what its session adds to `environment`. An image
@@ -358,6 +669,9 @@ class State:
                            "reason": "", "cancelled": False, "before": (package.get("harness"), self.package.spec)}
             if "memory" in data:
                 self.switch["memory"] = data["memory"]
+            # The chat the next harness goes on with, for a new VM to open.
+            if isinstance(data.get("chat"), str) and CHAT_ID.fullmatch(data["chat"]):
+                self.switch["chat"] = data["chat"]
             self.lock.notify_all()
             return self.switch["id"]
 
@@ -405,6 +719,8 @@ class State:
             taken.update(targets=record["targets"], secrets=record.pop("secrets", {}))
             if "memory" in record:
                 taken["memory"] = record["memory"]
+            if "chat" in record:
+                taken["chat"] = record["chat"]
         else:
             record.pop("secrets", None)
         return taken
@@ -520,6 +836,8 @@ class State:
             kept = kept_setup(data)
             environment = harness_environment(data, model)
             command = self.command(data, environment)
+            # The launcher keeps the person's chats on their computer: it sends the list next.
+            self.history_kept = isinstance(data.get("history"), dict)
             if data.get("sites") is not None:
                 # Chosen sites: the tool's HTTPS goes through the VM's proxy; model requests stay
                 # on the relay at loopback; the proxy opens chosen targets straight out.
@@ -589,7 +907,8 @@ class Control(Handler):
     def do_POST(self):
         state = self.server.state
         try:
-            data = json.loads(self.body(3 * 1024 * 1024 if self.path in ('/package/chunk', '/tunnel') else 128 * 1024))
+            large = ('/package/chunk', '/tunnel', '/history/save', '/history/body', '/history/index')
+            data = json.loads(self.body(3 * 1024 * 1024 if self.path in large else 128 * 1024))
             if not isinstance(data, dict):
                 raise ValueError("Expected an object.")
             if self.path == '/package/status':
@@ -625,6 +944,43 @@ class Control(Handler):
             if self.path in ("/switch/progress", "/switch/accepted", "/switch/done", "/switch/failed"):
                 # From the launcher, for the switch it took from /poll.
                 return self.send_json(200, state.switch_report(self.path, data))
+            if self.path in ("/history/save", "/history/list", "/history/open"):
+                # From inside the VM: the screen's own, with the session's token.
+                given = self.headers.get(SWITCH_HEADER) or ""
+                if not hmac.compare_digest(given.encode(), state.token.encode()):
+                    return self.send_json(403, {"error": "The history is the screen's own."})
+                try:
+                    if self.path == "/history/save":
+                        return self.send_json(200, state.history_save(data))
+                    if self.path == "/history/list":
+                        return self.send_json(200, state.history_list())
+                    return self.send_json(200, state.history_open(data))
+                except LookupError as missing:
+                    return self.send_json(404, {"error": str(missing)})
+                except ValueError as error:
+                    return self.send_json(400, {"error": str(error)})
+            if self.path == "/subscription":
+                # From inside the VM: the screen's own, with the session's token.
+                given = self.headers.get(SWITCH_HEADER) or ""
+                if not hmac.compare_digest(given.encode(), state.token.encode()):
+                    return self.send_json(403, {"error": "Choosing a plan is the screen's own."})
+                try:
+                    return self.send_json(200, state.subscribe(data))
+                except Refusal as refusal:
+                    return self.send_json(409, {"error": str(refusal)})
+                except ValueError as error:
+                    return self.send_json(400, {"error": str(error)})
+            if self.path == "/subscription/granted":
+                # From the launcher, for the plan request it took from /poll.
+                return self.send_json(200, state.subscription_granted(data))
+            if self.path == "/subscription/failed":
+                return self.send_json(200, state.subscription_failed(data))
+            if self.path == "/history/index":
+                # From the launcher: the chats it keeps on the person's computer.
+                return self.send_json(200, state.history_listed(data))
+            if self.path == "/history/body":
+                # From the launcher: a chat the screen asked to open.
+                return self.send_json(200, state.history_answer(data))
             if self.path == '/package/finish':
                 state.package.finish()
                 return self.send_json(200,state.package.status())
@@ -641,7 +997,9 @@ class Control(Handler):
             if self.path == "/poll":
                 with state.lock:
                     state.lock.wait_for(lambda: whole(state.output) or state.requests or (state.tunnels and state.tunnels.events) or
-                        state.exit_code is not None or (state.switch is not None and state.switch["state"] == "waiting"), timeout=5)
+                        state.exit_code is not None or (state.switch is not None and state.switch["state"] == "waiting")
+                        or state.history_out or state.history_ask
+                        or (state.subscription is not None and state.subscription["state"] == "waiting"), timeout=5)
                     size = whole(state.output)
                     output = bytes(state.output[:size])
                     del state.output[:size]
@@ -651,14 +1009,32 @@ class Control(Handler):
                     requests = [state.requests.popleft()] if state.requests else []
                     tunnels = state.tunnels.take() if state.tunnels else []
                     switch = state.switch_take()
+                    chats, asked = state.history_take()
+                    plan = state.subscription_take()
+                    signed = state.credentials_take()
                     state.lock.notify_all()
+                    # The session's end is said once its output and its chats have gone.
                     packet = {"output": base64.b64encode(output).decode(), "requests": requests, "tunnels": tunnels,
-                              "exit": state.exit_code if not state.output else None}
+                              "exit": state.exit_code if not state.output and not state.history_out else None}
                     if switch is not None:
                         packet["switch"] = switch
+                    if chats:
+                        packet["history"] = chats
+                    if asked:
+                        packet["history_open"] = asked
+                    if plan is not None:
+                        packet["subscription"] = plan
+                    if signed:
+                        packet["credentials"] = signed
                     return self.send_json(200, packet)
             if self.path == "/finish":
-                return self.send_json(200, {"exit": state.finish()})
+                # The screen saves its chat as it ends: what it saved goes back with the end.
+                code = state.finish()
+                with state.lock:
+                    chats, _ = state.history_take()
+                    signed = state.credentials_take()
+                return self.send_json(200, {"exit": code, **({"history": chats} if chats else {}),
+                                            **({"credentials": signed} if signed else {})})
             if self.path == "/input":
                 raw = base64.b64decode(data.get("data", ""), validate=True)
                 if len(raw) > 16384 or state.master is None:

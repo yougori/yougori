@@ -335,7 +335,9 @@ def same_installer(image, files):
         if folder.resolve() != folder:
             return False
         for name, digest in files.items():
-            path = folder / PurePosixPath(name).name
+            # Where the pack stage copies it: /opt/solver/NAME, or the same folders for one of a folder
+            # (licenses/texts/...).
+            path = folder.joinpath(*PurePosixPath(name).parts)
             if path.is_symlink() or not path.is_file() or digest_of(path) != digest:
                 return False
         return True

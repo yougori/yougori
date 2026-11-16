@@ -18,6 +18,7 @@ or another model) ends the harness as Ctrl+C at its prompt does, so what it star
 
 `python3 terminal_ui.py brief TEXT -- PROGRAM ARGS...` shows TEXT as the line to paste at a
 harness's first question (PentestGPT), then runs the program in its place."""
+import base64
 import codecs
 import contextlib
 import os
@@ -56,6 +57,33 @@ BRANDS = {
     "shannon": ((0x74, 0xC0, 0xFC), (0x38, 0xD9, 0xA9)),     # light blue to mint
     "strix": ((0xFF, 0x92, 0x2B), (0xFF, 0xD4, 0x3B)),       # orange to yellow
     "pentestgpt": ((0x69, 0xDB, 0x7C), (0x3B, 0xC9, 0xDB)),  # green to cyan
+    # The harnesses of Yougori's terminal (agent_kit.py), by their id (SOLVER_HARNESS) or name.
+    "langgraph": ((0x4D, 0xAB, 0xF7), (0x97, 0x75, 0xFA)),
+    "deepagents": ((0x74, 0x8F, 0xFC), (0x63, 0xE6, 0xBE)),
+    "crewai": ((0xFF, 0x87, 0x87), (0xFF, 0xC0, 0x78)),
+    "smolagents": ((0xFF, 0xD4, 0x3B), (0xFF, 0x92, 0x2B)),
+    "strands": ((0x66, 0xD9, 0xE8), (0x4D, 0xAB, 0xF7)),
+    "adk": ((0x69, 0xDB, 0x7C), (0x4D, 0xAB, 0xF7)),
+    "agentframework": ((0x74, 0xC0, 0xFC), (0xDA, 0x77, 0xF2)),
+    "vanna": ((0x97, 0x75, 0xFA), (0xF7, 0x83, 0xAC)),
+    "gptresearcher": ((0x38, 0xD9, 0xA9), (0x74, 0xC0, 0xFC)),
+    "opendeepresearch": ((0xB1, 0x97, 0xFC), (0x66, 0xD9, 0xE8)),
+    "paperqa": ((0xFF, 0xA9, 0x4D), (0xF7, 0x83, 0xAC)),
+    "eigent": ((0xDA, 0x77, 0xF2), (0x74, 0x8F, 0xFC)),
+    "browseruse": ((0xFF, 0xA8, 0xA8), (0xFF, 0xD8, 0xA8)),
+    "pipecat": ((0x63, 0xE6, 0xBE), (0xA9, 0xE3, 0x4B)),
+    "finrobot": ((0x8C, 0xE9, 0x9A), (0x66, 0xD9, 0xE8)),
+    "pandasai": ((0xFF, 0xC0, 0x78), (0xFF, 0x87, 0x87)),
+    "taskweaver": ((0x74, 0xC0, 0xFC), (0x8C, 0xE9, 0x9A)),
+    "tradingagents": ((0xFF, 0xD4, 0x3B), (0x69, 0xDB, 0x7C)),
+    "chemcrow": ((0x63, 0xE6, 0xBE), (0xDA, 0x77, 0xF2)),
+    "deerflow": ((0xFF, 0xA9, 0x4D), (0x74, 0xC0, 0xFC)),
+    "biomni": ((0x8C, 0xE9, 0x9A), (0x38, 0xD9, 0xA9)),
+    "openmanus": ((0xF7, 0x83, 0xAC), (0xFF, 0xD4, 0x3B)),
+    "livekit": ((0xA9, 0xE3, 0x4B), (0x66, 0xD9, 0xE8)),
+    "agenttars": ((0xFF, 0x87, 0x87), (0x74, 0x8F, 0xFC)),
+    "stagehand": ((0xFF, 0xD8, 0xA8), (0x63, 0xE6, 0xBE)),
+    "geoagent": ((0x69, 0xDB, 0x7C), (0xFF, 0xD4, 0x3B)),
 }
 # The light: how fast it runs over a line (columns a second), how wide it is, and the pause
 # between two passes; the input box's colours go once round in FLOW_SECONDS.
@@ -985,6 +1013,38 @@ def line_word(empty):
     return "\x1b]7717;line;%s\x07" % ("empty" if empty else "text")
 
 
+# The most of one text a client tells the pane of the chat (its base64 stays within what the pane
+# reads, harness/src/ui/pane.rs base64_text).
+CHAT_CHARACTERS = 40000
+
+
+def chat_word(kind, text, role=None):
+    """What a Yougori client tells the screen's pane of the chat, for the person's history (OSC
+    7718, which the pane draws nothing for): a prompt or a reply (`turn` with its `role`, user or
+    assistant), or a tool that ran (`tool`). Only inside that pane (YOUGORI_PANE=1)."""
+    if os.environ.get("YOUGORI_PANE") != "1" or not text:
+        return ""
+    data = base64.b64encode(str(text)[:CHAT_CHARACTERS].encode("utf-8")).decode("ascii")
+    return "\x1b]7718;%s%s;%s\x07" % (kind, ";" + role if role else "", data)
+
+
+def earlier_chat():
+    """The earlier chat the Yougori screen gives a client that takes one over (a /harness switch, a
+    model switch, a chat opened from /history): the file it wrote, read once and removed. '' when
+    there is none."""
+    path = os.environ.get("YOUGORI_CONTEXT_FILE")
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            text = stream.read(512 * 1024)
+    except OSError:
+        return ""
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return text.strip()
+
+
 class HangUp(KeyboardInterrupt):
     """The terminal hung up: the Yougori screen stops the harness (/new, another model, quit) or
     the session ends. The harness ends as Ctrl+C at its prompt ends it, so its servers stop too."""
@@ -1092,6 +1152,9 @@ class Screen:
         self.hung_up = threading.Event()
         # The harness the banner named, whose colours the screen takes (SOLVER_HARNESS's before).
         self.harness = None
+        # A client that tells the pane its turns (agent_kit.py) has each step's row told as a tool
+        # that ran, for the person's history.
+        self.recording = False
 
     # Where lines go and keys come from, looked up each time (the tests redirect sys.stdout).
     @staticmethod
@@ -1131,6 +1194,12 @@ class Screen:
                 stream.flush()
             except (OSError, ValueError):
                 pass
+
+    def record(self, kind, text, role=None):
+        """Tells the Yougori screen's pane of the chat (chat_word): a prompt, a reply or a tool."""
+        word = chat_word(kind, text, role)
+        if word:
+            self.write(word)
 
     def spinner(self):
         return SPINNER[int((time.monotonic() - self.epoch) / SPIN_SECONDS) % len(SPINNER)]
@@ -1393,6 +1462,8 @@ class Screen:
         step = Step(kind, title)
         look = self.look()
         kind_style = style(look.accent, BOLD)
+        if self.recording:
+            self.record("tool", "%s %s" % (kind, " ".join(clean(title).split())))
 
         def row():
             now = time.monotonic()

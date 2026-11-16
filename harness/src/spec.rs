@@ -76,6 +76,14 @@ pub struct EngineSpec {
     /// from an older launcher or image.
     #[serde(flatten)]
     pub session: Session,
+    /// The client's own sign-in, run in the terminal pane before the engine starts, when the
+    /// model is a plan the client is not signed in to yet (`claude auth login`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sign_in: Vec<String>,
+    /// The model's name for the engine itself, when it differs from `model` (a plan's model:
+    /// `sonnet` for `subscription:claude/sonnet`); empty: the engine's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_model: Option<String>,
 }
 
 /// The harnesses a session may switch to and what the switch command needs (runtime.py writes
@@ -96,6 +104,83 @@ pub struct Session {
     /// The inference's address, for the command that starts another session.
     #[serde(default)]
     pub server: String,
+    /// The chat this session goes on with (a /harness switch into a new VM brought it), by id:
+    /// the screen opens it from the history when it starts.
+    #[serde(default)]
+    pub resume: String,
+    /// Each plan's sign-ins the person's computer holds (`claude`, `chatgpt`), which the screen
+    /// offers when the person chooses the plan.
+    #[serde(default)]
+    pub subscriptions: BTreeMap<String, PlanState>,
+}
+
+/// What the person's computer holds of a plan's sign-in.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlanState {
+    /// One Yougori kept from an earlier sign-in in a VM.
+    #[serde(default)]
+    pub saved: bool,
+    /// The computer's own client's.
+    #[serde(default)]
+    pub computer: bool,
+}
+
+/// A plan the person signs in to: its id, its name, the harness whose client signs in, the sign-in
+/// file in that client's home, and the sites its client reaches.
+pub struct Plan {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub harness: &'static str,
+    /// The client's own name, as the screen names its harness.
+    pub client: &'static str,
+    pub credential: &'static str,
+    pub sites: &'static [&'static str],
+    /// Whether the sign-in may travel: taken from the person's computer, and kept by Yougori for
+    /// the next session. OpenAI documents copying Codex's auth.json to another machine. Anthropic
+    /// lets no third party collect, store or pass on Claude credentials: a Claude sign-in completes
+    /// in Claude Code's own sign-in inside the VM, and stays there.
+    pub transferable: bool,
+    /// How its client signs in, as the plan's panel says.
+    pub how: &'static str,
+}
+
+pub const PLANS: [Plan; 2] = [
+    Plan {
+        id: "claude",
+        name: "Claude",
+        harness: "claude",
+        client: "Claude Code",
+        credential: ".claude/.credentials.json",
+        sites: &["anthropic.com", "claude.ai", "claude.com"],
+        transferable: false,
+        how: "Claude Code's own sign-in, in your browser; it stays in this VM",
+    },
+    Plan {
+        id: "chatgpt",
+        name: "ChatGPT",
+        harness: "codex",
+        client: "Codex",
+        credential: ".codex/auth.json",
+        sites: &["chatgpt.com", "openai.com"],
+        transferable: true,
+        how: "Codex gives a code for your browser (device code sign-in must be on in ChatGPT's security settings); Yougori keeps the sign-in",
+    },
+];
+
+/// The plan and the model's name there, for a plan's model id.
+pub fn plan_of(model: &str) -> Option<(&'static Plan, &str)> {
+    let rest = model.strip_prefix(SUBSCRIPTION)?;
+    let (plan, name) = rest.split_once('/').unwrap_or((rest, "default"));
+    PLANS.iter().find(|p| p.id == plan).map(|p| (p, name))
+}
+
+/// A model as the screen names it: a plan's as "Claude plan · sonnet", any other as it is.
+pub fn shown_model(model: &str) -> String {
+    match plan_of(model) {
+        Some((plan, "default")) => format!("{} plan", plan.name),
+        Some((plan, name)) => format!("{} plan · {name}", plan.name),
+        None => model.to_owned(),
+    }
 }
 
 /// A harness this session may switch to, as the website lists it.
@@ -105,6 +190,10 @@ pub struct HarnessChoice {
     pub name: String,
     #[serde(default = "coding")]
     pub category: String,
+    /// The kind of work it is for, as the website's categories say (agents, data, research...):
+    /// what the list names after it. Empty from a launcher before them: the category then.
+    #[serde(default)]
+    pub kind: String,
     #[serde(default)]
     pub description: String,
     /// Its own questions, as the website describes them (asked with the CLI's meaning).
@@ -200,6 +289,16 @@ impl Reach {
     pub fn web(&self) -> bool {
         self.mode != "inference"
     }
+}
+
+/// What a model id starts with when it is a plan the person signed in to (their own Claude or
+/// ChatGPT subscription, in Claude Code or Codex), not one of this inference's models: the relay
+/// never serves it.
+pub const SUBSCRIPTION: &str = "subscription:";
+
+/// Whether `model` is a subscription the person signed in to.
+pub fn subscribed(model: &str) -> bool {
+    model.starts_with(SUBSCRIPTION)
 }
 
 fn coding() -> String {

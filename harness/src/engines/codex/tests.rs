@@ -237,3 +237,24 @@ fn unified_diffs_apply_or_refuse() {
     assert_eq!(Preset::of(&json!("never"), &json!({"type": "dangerFullAccess"})), Some(Preset::FullAccess));
     assert_eq!(short_title("cargo build\ncargo test"), "cargo build …");
 }
+
+#[tokio::test]
+async fn a_plan_starts_on_its_own_model_or_codexs_default() {
+    let dir = tempfile::tempdir().unwrap();
+    for (engine_model, sent) in [(Some(""), None), (Some("gpt-5-codex"), Some(json!("gpt-5-codex")))] {
+        let (transport, mut fake) = pipes();
+        let mut planned = spec(dir.path());
+        planned.model = "subscription:chatgpt/default".into();
+        planned.engine_model = engine_model.map(str::to_owned);
+        let client = tokio::spawn(connect(planned, transport));
+        let (id, _) = request(&mut fake, "initialize").await;
+        reply(&mut fake, id, json!({"userAgent": "codex_cli_rs/0.166.0"})).await;
+        let _ = recv(&mut fake).await;
+        let (id, params) = request(&mut fake, "thread/start").await;
+        assert_eq!(params.get("model").cloned(), sent, "{params}");
+        reply(&mut fake, id, json!({"thread": {"id": "th1"}, "approvalPolicy": "untrusted", "sandbox": {"type": "dangerFullAccess"}})).await;
+        let mut engine = client.await.unwrap().unwrap();
+        let Event::Ready(ready) = next(&mut engine).await else { panic!() };
+        assert_eq!(ready.model, "subscription:chatgpt/default", "the screen keeps the plan's name");
+    }
+}

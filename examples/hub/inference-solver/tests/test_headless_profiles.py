@@ -83,7 +83,9 @@ class Headless(unittest.TestCase):
                 self.assertEqual(spec["harness"], harness)
                 self.assertEqual(spec["name"], profiles.NAMES[harness])
                 self.assertEqual(spec["category"], "security" if harness in profiles.SECURITY else "coding")
-                self.assertEqual((spec["model"], spec["models"]), ("qwen3-coder", ["qwen3-coder", "gemma-4"]))
+                # Claude Code and Codex list the plans their own clients sign in to as well.
+                self.assertEqual((spec["model"], spec["models"]),
+                                 ("qwen3-coder", ["qwen3-coder", "gemma-4"] + profiles.subscription_models(harness)))
                 self.assertEqual(spec["respec"], ["python3", "/opt/solver/runtime.py", "engine", harness])
                 self.assertEqual((spec["context_window"], spec["max_output"]), (32768, 4096))
                 self.assertEqual((spec["base_url"], spec["api_key"]), (profiles.BASE, profiles.LOCAL_KEY))
@@ -179,6 +181,49 @@ class Headless(unittest.TestCase):
             self.spec("not-a-harness")
         with self.assertRaisesRegex(ValueError, r"^The model other is not available on this server right now\."):
             profiles.headless("opencode", "other", CATALOG, self.home, {}, cwd=self.work)
+
+    def test_a_subscription_runs_the_clients_own_provider_through_the_proxy(self):
+        claude = profiles.headless("claude", "subscription:claude/sonnet", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        env = claude["env"]
+        self.assertEqual((claude["protocol"], claude["model_switch"], claude["engine_model"]), ("claude-stream-json", "restart", "sonnet"))
+        self.assertEqual(claude["argv"][-4:], ["--model", "sonnet", "--setting-sources", "user"])
+        for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY", "SOLVER_API_KEY"):
+            self.assertNotIn(name, env, "no relay for a subscription")
+        self.assertEqual((env["HTTPS_PROXY"], env["NO_PROXY"]), (profiles.SITES_PROXY, "127.0.0.1,localhost"))
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"], str(self.home / ".claude"))
+        self.assertEqual(json.loads((self.home / ".claude/settings.json").read_text()), {"model": "sonnet"})
+        self.assertEqual(claude["sign_in"], ["claude", "auth", "login"], "not signed in yet: the screen signs in first")
+        self.assertEqual((claude["context_window"], claude["max_output"]), (200000, 32000))
+        self.assertIn("qwen3-coder", claude["models"], "this inference's models stay in the list")
+        (self.home / ".claude/.credentials.json").write_text('{"claudeAiOauth": {}}')
+        signed = profiles.headless("claude", "subscription:claude/default", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        self.assertNotIn("sign_in", signed)
+        self.assertNotIn("--model", signed["argv"])
+        self.assertEqual(signed["engine_model"], "")
+        codex = profiles.headless("codex", "subscription:chatgpt/default", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        self.assertEqual((codex["protocol"], codex["engine_model"], codex["sign_in"]), ("codex-app-server", "", ["codex", "login", "--device-auth"]))
+        config = (self.home / ".codex/config.toml").read_text()
+        self.assertNotIn("solver", config)
+        self.assertNotIn("model =", config)
+        self.assertIn('cli_auth_credentials_store = "file"', config, "the sign-in in auth.json, which Yougori keeps")
+        self.assertEqual(codex["env"]["CODEX_HOME"], str(self.home / ".codex"))
+        # A plan model with its own name goes into Codex's config by that name.
+        with patch.dict(profiles.SUBSCRIPTIONS["chatgpt"], {"models": ("default", "gpt-5-codex")}):
+            named = profiles.headless("codex", "subscription:chatgpt/gpt-5-codex", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        self.assertEqual(named["engine_model"], "gpt-5-codex")
+        self.assertTrue((self.home / ".codex/config.toml").read_text().startswith('model = "gpt-5-codex"\n'))
+        # Back to this inference's model: the relay's settings again.
+        again = profiles.headless("claude", "qwen3-coder", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        self.assertEqual(again["env"]["ANTHROPIC_BASE_URL"], profiles.BASE[:-3])
+        self.assertNotIn("HTTPS_PROXY", again["env"])
+
+    def test_a_subscription_belongs_to_its_own_client(self):
+        with self.assertRaisesRegex(ValueError, "works in Claude Code only"):
+            profiles.headless("opencode", "subscription:claude/sonnet", CATALOG, self.home, {}, cwd=self.work, run=Ran())
+        for model in ("subscription:claude/gpt-5", "subscription:nobody/x", "subscription:", "claude/sonnet"):
+            self.assertIsNone(profiles.subscription(model), model)
+        self.assertEqual(profiles.subscription("subscription:chatgpt"), ("chatgpt", "default"))
+        self.assertEqual(profiles.subscription_models("opencode"), [])
 
     def test_configure_is_unchanged_for_the_terminal_clients(self):
         argv, env = profiles.configure("opencode", "qwen3-coder", CATALOG, self.home)

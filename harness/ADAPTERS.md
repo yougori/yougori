@@ -185,6 +185,11 @@ terminal clients, shown in the screen's terminal pane.
   elicitations → questions. Probe: accept runs the command, decline reports it rejected.
 - Model: `turn/start model` (probe: the switched turns used it). Cancel: `turn/interrupt` →
   `turn/completed` status `interrupted` (probe).
+- The person's ChatGPT plan (`subscription:chatgpt/default`, 15 Nov 2026): `config.toml` without
+  the relay's provider, Codex's own sign-in (`auth.json` in `CODEX_HOME`), the VM's proxy for the
+  plan's sites (`HTTPS_PROXY`), `thread/start` without a model (Codex's default for the plan;
+  `spec.engine_model`), model switch by restart. Signing in: `codex login --device-auth` (0.166.0
+  has it, with `--with-access-token` and `status`), run in the screen's terminal pane first.
 
 ### Claude Code 2.1.316 (npm package; protocol from the Claude Agent SDK for Python)
 - Command as in the table (flags as the SDK passes them,
@@ -203,6 +208,13 @@ terminal clients, shown in the screen's terminal pane.
   `bypassPermissions`), `interrupt` (`query.py:823-845`); probe: interrupt answered
   `still_queued: []`, the turn ended. TodoWrite shows as the plan; subagent messages carry
   `parent_tool_use_id`.
+- The person's Claude plan (`subscription:claude/sonnet`, 15 Nov 2026): no `ANTHROPIC_*` relay
+  variables and a `settings.json` without them, Claude Code's own sign-in (`.credentials.json` in
+  `CLAUDE_CONFIG_DIR`), the VM's proxy for the plan's sites, `--model` with the plan's alias (none
+  for the plan's default), model switch by restart; its `system/init` model does not rename the
+  screen's. Signing in: `claude auth login` (2.1.316 has `auth login|logout|status --json`),
+  run in the screen's terminal pane first; the sign-in stays in the VM (never copied in or out:
+  NOTICE.md). Claude Code itself is not offered at present (`packages.json` "blocked").
 
 ### Pi 0.73.1 (`pi-inv/repo`, tag v0.73.1 = 781152fc)
 - Command `pi --mode rpc --provider solver --model <m>` (`packages/coding-agent/docs/rpc.md:7-17`).
@@ -253,6 +265,82 @@ terminal clients, shown in the screen's terminal pane.
 - For the practice app the spec starts `practice_app.py` first as a service, and the harness tests
   `http://127.0.0.1:8000`. Any other target starts nothing without the permission yes. The test
   login's password reaches the client only as `YOUGORI_SECRET_LOGIN_PASSWORD`, through `secret_env`.
+
+### Harnesses for every kind of work (15 Nov 2026)
+Thirty harnesses beyond coding and security, protocol `terminal`. Most run in Yougori's terminal
+for engines without one (`site/harnesses/agent_kit.py`, a kit each in `kits/`), started as
+`/opt/solver/tool/bin/python -I /opt/solver/agent_kit.py NAME --model M --context-window W
+--max-output R [--answers JSON]` with `SOLVER_REACH` and `SOLVER_HARNESS`; mini-SWE-agent,
+HolmesGPT, Continue and OpenClaw run their own terminal clients (`profiles.OWN_CLIENTS`). The spec's
+`category` is the website's (`profiles.CATEGORIES`). In the switch list the launcher sends each
+entry's `category` as before (security or coding, which every guest and screen take) and the
+website's category as `kind` (`vm_host.CATEGORIES`, checked by `vm_guest.KINDS`); the switcher names
+the kind after the harness's name (`switcher::category_words`). The pane draws each kit harness's
+name in its colours (`pane::brand`, `terminal_ui.BRANDS`).
+
+Checked inside real VMs on the end-to-end stand (`yougori inference run --harness NAME`, the
+stand's test engine and site, argon's Gemma, the task typed into the screen, the VM's files reviewed
+and promoted), 23 of the 30: LangGraph, Deep Agents, CrewAI, smolagents, Strands, Google ADK,
+Microsoft Agent Framework, Eigent, OpenManus (each wrote `totals.md` from `sales.csv`), Vanna,
+TaskWeaver, PandasAI (answers from the data), PaperQA2, Open Deep Research (answers from the notes),
+GPT Researcher (a web report, promoted), Browser Use, Stagehand, Agent TARS (pages read with the
+whole internet), Pipecat, LiveKit Agents (customer answers from the documents), GeoAgent
+(`maps/map.html`), Biomni, and Continue up to its own permission question and first command. Not yet
+in a VM: mini-SWE-agent, HolmesGPT, OpenClaw, DeerFlow, TradingAgents, FinRobot; ChemCrow needs the
+web at its start (it says so when the VM reaches only the inference).
+
+How it was verified: each harness's engine ran a real turn against argon's Gemma 4 26B-A4B (131K
+window) through a relay that, like the VM's, gives the harness only `solver-local-relay`, in a
+Debian trixie / Python 3.12.16 distro made from the images' own OS layer, from the pinned packages.
+Checked per harness: the tool rows, the files it wrote, its answer.
+
+- Agent frameworks: LangGraph (a StateGraph of model and tool nodes, checkpointed; a stopped turn is
+  removed with `RemoveMessage`), Deep Agents (its planning, subagents and file tools on the workspace
+  through `FilesystemBackend`, plus this terminal's shell), CrewAI (a Specialist and a Reviewer,
+  sequential), smolagents (CodeAgent; only importable modules are authorised), Strands, Google ADK
+  (LlmAgent on InMemoryRunner, LiteLLM), Microsoft Agent Framework (its chat-completions client: the
+  Responses client stores responses, which this inference does not keep). All wrote `totals.md` from
+  `sales.csv` correctly.
+- Data: Vanna 2.0 (its Agent with `RunSqlTool` on SQLite: the named database, the folder's first one,
+  or one made from the folder's CSV files; its result files stay in its home), TaskWeaver (Planner and
+  Code Interpreter on a local kernel; `top_p` 0.95, as model servers refuse 0), PandasAI 3.0.
+- Research: GPT Researcher (web through DuckDuckGo, or the folder's documents; lexical embeddings),
+  Open Deep Research (its graph's researchers get this terminal's tools via `get_all_tools`), PaperQA2
+  (Docs with sparse embeddings, citations), DeerFlow 1.x (`main-1.x`, conf.yaml in its home).
+- Office: Browser Use 1.0 (a headless Chromium; Chromium leaves the terminal non-blocking, so the
+  terminal writes through `Steady`), Agent TARS 0.3.1 (its own headless runner posts without the
+  CSRF token its server requires, so the kit runs `agent-tars serve` and asks for the token first),
+  Stagehand 4.4 (its engine runs in a local headless Chromium as an extension; its custom-model
+  callback carries its messages, tool calls and JSON schemas to the relay, and a planner on the same
+  model drives its open, act, observe and extract steps; Chromium's own sandbox is off for the VM's
+  user, as for Browser Use), Eigent (CAMEL Workforce with Developer, Document and Search workers), OpenManus (its config beside
+  its source, its workspace the person's folder, an unused Daytona section it requires; its browser,
+  an MCP server it fetches with uvx at every start, is off in the VM), OpenClaw
+  (`openclaw chat`, its local embedded agent with the relay as its one provider).
+- Service: Pipecat (a text pipeline: user aggregator, OpenAI LLM service, assistant aggregator) and
+  LiveKit Agents (`AgentSession.run(user_input=...)`, text only, with function tools); both answer
+  from the folder's documents.
+- Finance: TradingAgents (its graph from the library; reports to `reports/tradingagents`), FinRobot
+  (Market Analyst on AutoGen; its chat resets its agents, so the kit keeps the messages first).
+- Science: GeoAgent (leafmap map tools, the map saved to `maps/map.html`), ChemCrow (its ReAct agent;
+  Gemma's channel markers are taken out of replies before the parser reads them), Biomni A1
+  (commercial mode, no data lake).
+- Every kit's answer has Gemma's leftover thinking markers removed (`agent_kit.MARKERS`).
+- Offline token tables: CAMEL (Eigent), LiteLLM, AutoGen and TaskWeaver count tokens with tiktoken,
+  which fetches its tables from the internet on first use; a VM that reaches only its inference
+  cannot (Eigent stopped at its start in a VM). The base images hold cl100k and o200k, checked by
+  sha256 at build time, under tiktoken's cache names in /opt/solver/tiktoken, and the kits and the
+  new terminal clients get `TIKTOKEN_CACHE_DIR`.
+
+Not done, and why: Parlant (needs an embedding model for its guideline matching; this inference
+serves none, and its 4.0 model configuration does not take one of ours simply), Data Formulator (its
+agents' workspace lives inside its Flask web app; the app itself is a browser UI), Skyvern and SurfSense (server stacks:
+PostgreSQL, Redis, workers and a web UI), Khoj (PostgreSQL with pgvector and a local embedding model
+beyond the pack limit), kagent (runs inside a Kubernetes cluster), RAI (ROS 2), Agent S (a desktop and
+a grounding model), Pipali (reaches models only through Pipali's own platform), AI-Scientist-v3 (it
+orchestrates other coding agents on long experiments), Agent Laboratory, SciAgents, AtomAgents,
+Agent-CAD, DeepAnalyze and RD-Agent (research code built for their own models, notebooks, LAMMPS,
+CAD kernels or Docker).
 
 ## For the screen and the other engineers
 

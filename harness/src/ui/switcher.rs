@@ -548,6 +548,7 @@ impl Pending {
             id: YOUGORI.into(),
             name: "Yougori".into(),
             category: "coding".into(),
+            kind: String::new(),
             ready: true,
             ..HarnessChoice::default()
         });
@@ -720,6 +721,7 @@ impl Flow {
                     || entry.name.to_lowercase().contains(&filter)
                     || entry.id.contains(&filter)
                     || entry.description.to_lowercase().contains(&filter)
+                    || category_words(kind_of(entry)).is_some_and(|words| words.to_lowercase().contains(&filter))
             })
             .collect()
     }
@@ -1217,12 +1219,33 @@ impl Flow {
     }
 }
 
-/// A harness's name in the list.
+/// A harness's name in the list, with the kind of work it is for unless it is a coding harness
+/// (the website's categories, site/categories.json).
 fn label(entry: &HarnessChoice) -> String {
-    if entry.category == "security" {
-        format!("{} (security)", entry.name)
-    } else {
-        entry.name.clone()
+    match category_words(kind_of(entry)) {
+        Some(words) => format!("{} ({words})", entry.name),
+        None => entry.name.clone(),
+    }
+}
+
+/// The kind of work a harness is for: the launcher's kind, else its category.
+fn kind_of(entry: &HarnessChoice) -> &str {
+    if entry.kind.is_empty() { &entry.category } else { &entry.kind }
+}
+
+/// A category in the list's words; None for coding and for a category this screen does not know.
+pub fn category_words(category: &str) -> Option<&'static str> {
+    match category {
+        "security" => Some("security"),
+        "agents" => Some("agent framework"),
+        "operations" => Some("IT operations"),
+        "data" => Some("data"),
+        "research" => Some("research"),
+        "office" => Some("office"),
+        "service" => Some("customer service"),
+        "finance" => Some("finance"),
+        "science" => Some("science"),
+        _ => None,
     }
 }
 

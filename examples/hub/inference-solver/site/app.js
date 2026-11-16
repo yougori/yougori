@@ -264,19 +264,20 @@ function missing(key, text) {
   header("Not found", text, `<a class="secondary" href="#${key}">← ${tools ? "Main page" : "All models"}</a>`);
   $("#view").innerHTML = empty("Not found", text);
 }
-// The main page: harnesses, models and sandboxes side by side, the administrator's main page first.
-// Harnesses join when some are offered (Yougori, holding them); sandboxes when a computer offers them
-// or someone already has one. A column shorter than its neighbour stays in view beside it while it
-// fits the window.
+// The main page: Yougori, holding the harnesses, across the top when some are offered; below it models
+// and sandboxes side by side, the administrator's main page first. Sandboxes join when a computer
+// offers them or someone already has one. A column shorter than its neighbour stays in view beside it
+// while it fits the window.
 const COLUMNS = {harnesses: ["Harnesses", "Coding and security tools that run in Sandbox VMs."],
   models: ["Models", "Models appear automatically when their connected server reports them."],
   sandboxes: ["Sandboxes", "Choose an online computer. You can use only the CPU and RAM its owner contributes."]};
 function renderOverview() {
-  header("One API for every model", "Connect the tools you know to the models you control.", keysMenu());
+  header("One API for every model", "Connect the tools you know to the models you control.", apisMenu() + keysMenu());
+  bindApisMenu();
   bindKeysMenu();
-  const order = [home(), ...MAIN.filter(id => id !== home())];
+  const order = [home(), ...MAIN.filter(id => id !== home())].filter(id => id !== "harnesses");
   const action = id => id === "models" && session.user?.admin ? '<button type="button" class="text-button" id="connect-model">Connect a model server →</button>' : "";
-  $("#view").innerHTML = `<div class="overview">${order.map(id => `<section class="column" id="${id}-column" aria-labelledby="${id}-heading"><div class="column-head"><div><h2 id="${id}-heading">${COLUMNS[id][0]}</h2><p class="hint">${esc(COLUMNS[id][1])}</p></div>${action(id)}</div><div class="column-body" id="${id}-body"></div></section>`).join("")}</div>`;
+  $("#view").innerHTML = `<section class="top-harness" id="harnesses-column" aria-label="${COLUMNS.harnesses[0]}"><div id="harnesses-body"></div></section><div class="overview">${order.map(id => `<section class="column" id="${id}-column" aria-labelledby="${id}-heading"><div class="column-head"><div><h2 id="${id}-heading">${COLUMNS[id][0]}</h2><p class="hint">${esc(COLUMNS[id][1])}</p></div>${action(id)}</div><div class="column-body" id="${id}-body"></div></section>`).join("")}</div>`;
   $("#connect-model")?.addEventListener("click", connectDialog);
   renderHarnesses(); renderModels(); showSandboxes();
   columnWatch?.disconnect();
@@ -358,12 +359,19 @@ const REQUIREMENTS_CODING = "Yougori manages the private runtime on Windows. The
 // and nothing asks about it: the Yougori command holds it there (cli/src/inference.rs, resolve_reach), and
 // so does the source setup, which refuses --sites and --internet sites or full (solver.py, held_to_target).
 const REQUIREMENTS_SECURITY = "Yougori manages the private runtime on Windows. The VM reaches only the target and this server. Linux source requires Python and a supported Yougori VM backend. macOS is not supported yet.";
-// The Harnesses column lists Yougori alone, as a card: its name and state, the description, then
-// how many harnesses it holds.
+// The top of the main page shows Yougori alone, as a compact card in the palette's strong colours: on
+// one line what it is (Harness), its name, the description and how many harnesses it holds; on the next
+// how to install and use it in three steps, with its command to copy. Its name opens its own page, with
+// the full steps and every harness inside. One with nothing ready says In preparation and shows no steps.
 function yougoriRow(held) {
-  const y = yougori(), any = startable(y) || held.some(startable);
+  const y = yougori(), any = startable(y) || held.some(startable), command = installCommand(y.id);
   const holds = [`${counted(held.length, "harness", "harnesses")} inside`, ...grouped(held).map(([id, members]) => `${members.length} ${named(CATEGORIES, id)}`)].join(" · ");
-  return `<article class="entry"><div class="entry-head"><h3 class="entry-name"><a class="entry-open" href="${esc(pageLink("harnesses", y.id))}" data-harness="${esc(y.id)}">${esc(y.name)}</a></h3><span class="tag${any ? " ready" : ""}">${any ? "Ready" : "In preparation"}</span></div><p class="entry-text">${esc(y.description)}</p><p class="entry-meta">${esc(holds)}</p></article>`;
+  const steps = any ? `<ol class="feature-steps">`
+    + `<li><a class="text-button" id="top-get-yougori" href="https://yougori.com/#download" target="_blank" rel="noopener noreferrer">Install Yougori ↗</a></li>`
+    + `<li class="feature-run"><pre class="code" id="top-code">${esc(command)}</pre><button type="button" class="feature-copy" id="top-copy" data-copy="${esc(command)}">Copy</button></li>`
+    + `<li><a class="text-button" href="#connect" id="top-connect">Approve the code →</a></li>`
+    + `<li class="feature-more"><a class="text-button" href="${esc(pageLink("harnesses", y.id))}">All harnesses →</a></li></ol>` : "";
+  return `<article class="entry feature${any ? "" : " waiting"}"><div class="feature-top"><span class="tag feature-label">${any ? "Harness" : "In preparation"}</span><h3 class="entry-name"><a class="entry-open" href="${esc(pageLink("harnesses", y.id))}" data-harness="${esc(y.id)}">${esc(y.name)}</a></h3><p class="entry-text">${esc(y.description)}</p><p class="entry-meta">${esc(holds)}</p></div>${steps}</article>`;
 }
 function renderHarnesses() {
   const held = inside();
@@ -371,6 +379,7 @@ function renderHarnesses() {
   if (!held.length) return;
   // A coding harness is asked whether its VM may reach more; a security harness never is.
   $("#harnesses-body").innerHTML = `<div class="entries list" id="harnesses-list">${yougoriRow(held)}</div><p class="hint catalog-note">Blue terminals. Your models. Each harness runs in an isolated Sandbox VM. A coding harness reaches only this server unless you choose more. A security harness reaches only its target and this server.</p>`;
+  bindCopies($("#harnesses-list"));
   $("#harnesses-list").addEventListener("click", event => {
     const card = event.target.closest("[data-harness]");
     // Ctrl, Shift or Cmd opens Yougori's own address in a new tab or window, as any link does.
@@ -505,13 +514,22 @@ function modelRow(m) {
   const meta = [isMedia(m) ? esc(named(TASKS, m.task)) : esc(named(CENSORSHIP, m.censorship)), `<span class="model-id">${esc(m.id)}</span>`, esc((m.protocols || []).map(p => named(PROTOCOLS, p)).join(", ")), m.features?.json ? "JSON output" : "", esc(servedBy(m)), esc(cacheHits(m))].filter(Boolean).join(" · ");
   return `<article class="entry"><div class="entry-head"><h3 class="entry-name"><a class="entry-open" href="${esc(pageLink("models", m.id))}" data-model="${esc(m.id)}">${esc(friendly(m))}</a></h3><span class="tag${ready(m) ? " ready" : ""}">${esc(named(STATES, m.state))}</span><button type="button" class="text-button entry-action" data-copy="${esc(m.id)}" aria-label="Copy model ID ${esc(m.id)}">Copy ID</button></div><p class="entry-text mono">${esc(m.upstream)}</p><p class="entry-meta">${meta}</p></article>`;
 }
+// Offline models leave the main page until their server reports them again: one its server says it
+// cannot serve or that no server answers for (Unavailable), and one no server has reported in the last
+// 90 seconds (Stale). Starting and checking ones stay. A shared link to an offline model's page still opens.
+const OFFLINE = new Set(["unavailable", "stale"]);
+const online = () => models.filter(m => !OFFLINE.has(m.state));
 function renderModels() {
   redrawModels = null;
   if (!models.length) {
     $("#models-body").innerHTML = empty("Your first model starts here.",session.user?.admin ? "Connect an existing Yougori, vLLM, or llama.cpp model server. Its models will appear here without renting hardware or downloading weights again." : "Your administrator has not connected a model server yet.");
     return;
   }
-  redrawModels = catalog({key: "models", one: "model", noun: "models", items: () => models, root: $("#models-body"),
+  if (!online().length) {
+    $("#models-body").innerHTML = empty("No models are online right now.", "They appear here again as soon as their server is back.");
+    return;
+  }
+  redrawModels = catalog({key: "models", one: "model", noun: "models", items: () => online(), root: $("#models-body"),
     filters: [
       {id: "censored", label: "Censored", test: m => m.censorship !== "uncensored"},
       {id: "uncensored", label: "Uncensored", test: m => m.censorship === "uncensored"},
@@ -615,6 +633,7 @@ document.addEventListener("keydown", event => {
 });
 async function openKeys() {
   const panel = $("#keys-panel"); if (!panel) return;
+  closeApis();
   panel.hidden = false; $("#keys-button").setAttribute("aria-expanded", "true");
   await fillKeys();
   panel.querySelector("input, a")?.focus();
@@ -652,6 +671,59 @@ async function fillKeys(created = "") {
     });
   }
   panel.querySelectorAll("[data-revoke]").forEach(button => button.addEventListener("click", () => confirmAction("Revoke this key?", "Tools using it will lose access immediately.", async () => { await api("/api/keys/revoke", {id: button.dataset.revoke}); await fillKeys(); $("#keys-panel input")?.focus(); })));
+}
+// Your APIs: a dropdown beside API keys, where each person adds their own OpenAI-compatible APIs (a
+// name, the address, the key and, if they like, the models and the context window). Their models
+// join the person's models in every harness as NAME/MODEL. The key stays on the website (apis.py).
+function apisMenu() {
+  return `<div class="keys-menu" id="apis-menu"><button type="button" class="filter-button" id="apis-button" aria-expanded="false" aria-controls="apis-panel">Your APIs${CHEVRON}</button><div class="keys-panel" id="apis-panel" role="region" aria-label="Your APIs" hidden></div></div>`;
+}
+function bindApisMenu() {
+  const wrap = $("#apis-menu"), button = $("#apis-button"), panel = $("#apis-panel");
+  button.addEventListener("click", () => { if (panel.hidden) openApis(); else closeApis(); });
+  const outside = event => {
+    if (!wrap.isConnected) document.removeEventListener("pointerdown", outside);
+    else if (!panel.hidden && !wrap.contains(event.target) && !$("#dialog").contains(event.target)) closeApis();
+  };
+  document.addEventListener("pointerdown", outside);
+}
+document.addEventListener("keydown", event => {
+  const panel = $("#apis-panel");
+  if (event.key === "Escape" && panel && !panel.hidden && !$("#dialog").open) { closeApis(); $("#apis-button").focus(); }
+});
+async function openApis() {
+  const panel = $("#apis-panel"); if (!panel) return;
+  closeKeys();
+  panel.hidden = false; $("#apis-button").setAttribute("aria-expanded", "true");
+  await fillApis();
+  panel.querySelector("input, a")?.focus();
+}
+function closeApis() {
+  const panel = $("#apis-panel"); if (!panel) return;
+  panel.hidden = true; $("#apis-button").setAttribute("aria-expanded", "false");
+}
+function hostOf(url) { try { return new URL(url).host; } catch { return url; } }
+async function fillApis(added = null) {
+  const panel = $("#apis-panel"); if (!panel) return;
+  if (!session.user) {
+    panel.innerHTML = `<h3>Your APIs</h3><p class="hint">Sign in to use your own API keys in every harness, beside this inference's models.</p><div class="keys-actions"><a class="primary small" href="#signin">Sign in ↗</a>${session.mode === "public" ? '<a class="outline small" href="#signup">Sign up</a>' : ""}</div>`;
+    return;
+  }
+  let result;
+  try { result = await api("/api/apis"); } catch (problem) { notice(problem.message); return; }
+  if (!panel.isConnected) return;
+  const done = added ? `<p class="hint" role="status">Added ${added.models.length} model${added.models.length === 1 ? "" : "s"}. Choose them in any harness with /model, or when you start one.</p>` : "";
+  const form = `<form id="api-form" class="stack"><h3>Add your API</h3><p class="hint">Use any OpenAI-compatible API in every harness, beside this inference's models. Its key stays on this website: harness VMs never see it, and your provider bills what you use.</p>${done}<label>Name<input name="name" placeholder="My provider" required maxlength="40" autocomplete="off"></label><label>Address<input name="url" placeholder="https://api.example.com/v1" required maxlength="512" inputmode="url" autocomplete="off" spellcheck="false"></label><label>API key<input name="key" type="password" placeholder="Paste the key" maxlength="1024" autocomplete="off" spellcheck="false"></label><label>Models (optional)<input name="models" placeholder="Every chat model it lists, or name them: model-a, model-b" autocomplete="off" spellcheck="false"></label><label>Context window (optional)<input name="context" inputmode="numeric" placeholder="In tokens, such as 128000" autocomplete="off"></label><p class="error" role="alert"></p><div><button class="primary small" type="submit">Add API ↗</button></div></form>`;
+  const list = result.apis.length
+    ? `<ul class="key-list">${result.apis.map(a => `<li><div><strong>${esc(a.name)}</strong><span>${a.models.length} model${a.models.length === 1 ? "" : "s"} · ${esc(hostOf(a.url))} · ${esc(nowLabel(a.created))}</span><span class="api-models">${esc(a.models.slice(0, 4).join(", ") + (a.models.length > 4 ? ", …" : ""))}</span></div><button type="button" class="text-button" data-remove-api="${esc(a.id)}">Remove</button></li>`).join("")}</ul>`
+    : '<p class="hint">No APIs yet. Add one to use its models in every harness.</p>';
+  panel.innerHTML = `${form}<div class="keys-mine"><h3>Your APIs</h3>${list}</div>`;
+  formAction("#api-form", async data => {
+    const made = await api("/api/apis", {name: data.name, url: data.url, key: data.key, models: data.models, context: data.context});
+    await fillApis(made);
+    $("#apis-panel input")?.focus();
+  });
+  panel.querySelectorAll("[data-remove-api]").forEach(button => button.addEventListener("click", () => confirmAction("Remove this API?", "Its models leave every harness, and its key is deleted from this website.", async () => { await api("/api/apis/remove", {id: button.dataset.removeApi}); await fillApis(); $("#apis-panel input")?.focus(); })));
 }
 async function renderUsage(generation) {
   const r = await api("/api/usage"); if(generation !== viewGeneration) return;

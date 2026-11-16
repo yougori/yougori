@@ -8,9 +8,10 @@ use super::switcher::{Flow, FlowOutcome, Mode as Where, Pending};
 use super::text::clean;
 use super::theme::Theme;
 use super::transcript::{Key, Transcript};
+use crate::history::{self, Chat, Listing};
 use crate::protocol::{Command, Event, Level, Mode, ModelSwitch, PlanEntry, SlashCommand, StopReason, ToolCall, Usage};
 use crate::spec::EngineSpec;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 /// Ctrl+C twice within this quits.
@@ -62,6 +63,28 @@ pub enum Effect {
     /// Paint the whole screen again.
     Redraw,
     Quit,
+    /// Save the chat on the person's computer (history.rs).
+    Save(Box<Chat>),
+    /// /history: list the chats kept.
+    History,
+    /// Open this chat from /history.
+    Open(String),
+    /// Ask the model for its notes on the earlier part of the chat (`text`), which a prompt waits
+    /// for before it goes to the engine.
+    Notes { text: String },
+    /// Start the engine again, fresh (a new chat for an engine without a /new of its own).
+    Renew,
+    /// The person chose a plan (their own subscription) and how to sign in: the launcher opens its
+    /// sites and sends the sign-in, then the engine restarts with `model`.
+    Subscribe { plan: String, using: String, model: String },
+}
+
+/// A prompt waiting for the model's notes on the earlier part of the chat before it goes to the
+/// engine: what the person typed, and when it was sent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Waiting {
+    pub prompt: String,
+    pub since: Instant,
 }
 
 pub struct Turn {
@@ -152,8 +175,15 @@ pub struct App {
     /// Whether the terminal tells Shift+Enter from Enter; the keys line and the keys help then
     /// name it for a new line, else Ctrl+J.
     pub shift_enter: bool,
-    /// The last prompt this screen sent, to drop an engine's echo of it.
+    /// The last prompt this screen sent, to drop an engine's echo of it, and what the
+    /// conversation shows of it (without the earlier chat it may carry).
     echo: Option<String>,
+    echo_shown: Option<String>,
+    /// The engine was asked for a new session of its own for a new or opened chat: its word that
+    /// one started is not shown.
+    quiet_new: bool,
+    /// A save already failed this session (said once).
+    save_failed: bool,
     /// While a restart switch is prepared: the phase to go back to if the new model cannot be.
     switch_from: Option<Phase>,
     /// Yougori's own slash commands, which the screen handles itself (never the engine).
@@ -162,12 +192,31 @@ pub struct App {
     /// (the engine kept running).
     pub change: Option<Box<Pending>>,
     change_from: Option<Phase>,
+
+    /// The chat as it goes, kept on the person's computer (history.rs).
+    pub chat: Chat,
+    /// How many of the chat's turns the running engine has: the rest reach it with the next
+    /// prompt (a chat it took over), and whether it has the chat's terminal screen.
+    pub given: usize,
+    pub screen_given: bool,
+    /// The reply message last recorded, and the tool calls recorded this turn.
+    chat_message: Option<String>,
+    chat_tools: HashSet<String>,
+    /// A prompt waiting for the model's notes on the earlier chat.
+    pub waiting: Option<Waiting>,
+    /// Whether the person's computer keeps the chats (None until a save or a listing says).
+    pub kept: Option<bool>,
+    /// The chat this session goes on with is being opened (a /harness switch into a new VM brought
+    /// it): prompts wait for it, so that the engine gets it with the first.
+    pub resuming: bool,
 }
 
 /// Yougori's own slash commands: name, what it does, what to type after it.
-pub const OWN_COMMANDS: [(&str, &str, Option<&str>); 5] = [
+pub const OWN_COMMANDS: [(&str, &str, Option<&str>); 7] = [
     ("harness", "switch to another harness", Some("name")),
     ("model", "switch model", Some("id")),
+    ("new", "start a new chat (this one is kept)", None),
+    ("history", "open an earlier chat", None),
     ("help", "commands and keys", None),
     ("exit", "end the session", None),
     ("quit", "end the session", None),
@@ -176,7 +225,16 @@ pub const OWN_COMMANDS: [(&str, &str, Option<&str>); 5] = [
 impl App {
     pub fn new(spec: EngineSpec, theme: Theme, masker: Masker, owns_engine: bool, now: Instant) -> App {
         let models = if spec.models.is_empty() { vec![spec.model.clone()] } else { spec.models.clone() };
+        let chat = Chat::new(&spec.harness, &spec.name, &spec.model);
         App {
+            chat,
+            given: 0,
+            screen_given: false,
+            chat_message: None,
+            chat_tools: HashSet::new(),
+            waiting: None,
+            kept: None,
+            resuming: false,
             name: spec.name.clone(),
             model: spec.model.clone(),
             model_switch: spec.model_switch,
@@ -219,6 +277,9 @@ impl App {
             dirty: true,
             shift_enter: true,
             echo: None,
+            echo_shown: None,
+            quiet_new: false,
+            save_failed: false,
             switch_from: None,
             own: OWN_COMMANDS
                 .iter()
@@ -310,7 +371,9 @@ impl App {
                     self.models.insert(0, self.model.clone());
                 }
                 self.model_switch = ready.model_switch;
-                if again && ready.session.is_some() && self.session.is_some() && ready.session != self.session {
+                self.chat.model = self.model.clone();
+                let quiet = std::mem::take(&mut self.quiet_new);
+                if again && ready.session.is_some() && self.session.is_some() && ready.session != self.session && !quiet {
                     self.transcript.divider("A new session started");
                 }
                 self.session = ready.session;
@@ -328,16 +391,26 @@ impl App {
                 self.conversed = true;
                 self.replay_starts();
                 self.transcript.message(&message, &text, parent.as_deref());
+                // The chat keeps the harness's own replies, not its subagents' (they are in the
+                // tools it ran), a replayed session's, nor what the engine's own commands say.
+                if parent.is_none() && self.chat_turn() {
+                    let separate = self.chat_message.as_deref().is_some_and(|last| last != message);
+                    self.chat.reply(&text, separate);
+                    self.chat_message = Some(message);
+                    self.given = self.chat.turns.len();
+                }
             }
             Event::Reasoning { message, text, parent } => {
                 self.replay_starts();
                 self.transcript.reasoning(&message, &text, parent.as_deref());
             }
             Event::User { text } => {
+                let shown = self.echo_shown.clone().unwrap_or_else(|| text.clone());
                 let echoed = self.echo.as_deref().is_some_and(|sent| sent.trim() == text.trim())
-                    && self.transcript.last_user_text().is_some_and(|last| last.trim() == clean(&text).trim());
+                    && self.transcript.last_user_text().is_some_and(|last| last.trim() == clean(&shown).trim());
                 if echoed {
                     self.echo = None;
+                    self.echo_shown = None;
                 } else {
                     self.conversed = true;
                     self.replay_starts();
@@ -348,6 +421,10 @@ impl App {
                 self.replay_starts();
                 self.transcript.tool_call(&call, now);
                 self.settled(&call.id, Some(call.status), now);
+                if call.parent.is_none() && self.chat_turn() && self.chat_tools.insert(call.id.clone()) {
+                    self.chat.tool(&clean(&call.title));
+                    self.given = self.chat.turns.len();
+                }
             }
             Event::ToolUpdate(update) => {
                 self.settled(&update.id, update.status, now);
@@ -389,6 +466,7 @@ impl App {
                     if !self.models.contains(&model) {
                         self.models.push(model.clone());
                     }
+                    self.chat.model = model.clone();
                     self.model = model;
                 }
             }
@@ -398,7 +476,13 @@ impl App {
             }
             Event::Commands { commands } => self.commands = commands,
             Event::TurnEnd { reason, detail } => self.turn_ended(reason, detail, now),
-            Event::Notice { level, text } => self.transcript.notice(level, &text),
+            // What the engine says of the new session Yougori asked it for (a new or opened chat)
+            // is not shown: the screen has said it.
+            Event::Notice { level, text } => {
+                if !(self.quiet_new && self.turn.as_ref().is_some_and(|t| t.prompt == "/new")) || level != Level::Info {
+                    self.transcript.notice(level, &text)
+                }
+            }
             Event::Exit { code, message } => {
                 let failed = code != Some(0);
                 let mut message = clean(&message).trim().to_owned();
@@ -415,8 +499,18 @@ impl App {
 
     fn turn_ended(&mut self, reason: StopReason, detail: Option<String>, now: Instant) {
         self.transcript.end_turn();
-        self.turn = None;
+        let ended = self.turn.take();
+        let replayed = ended.as_ref().is_some_and(|turn| turn.replaying);
+        if ended.as_ref().is_some_and(|turn| turn.prompt == "/new") {
+            // The new session Yougori asked for has started.
+            self.quiet_new = false;
+        }
         self.dialogs.clear();
+        self.chat_message = None;
+        self.chat_tools.clear();
+        if !replayed {
+            self.save_chat();
+        }
         // The engine's own words when it gives them, else a plain default.
         let detail = detail.map(|d| clean(&d).trim().to_owned()).filter(|d| !d.is_empty());
         let said = |default: &str| detail.clone().unwrap_or_else(|| default.to_owned());
@@ -444,6 +538,12 @@ impl App {
         } else {
             self.send_queued(now);
         }
+    }
+
+    /// Whether what the engine says now belongs to the chat: no replayed session, and no turn of an
+    /// engine's own command (/new, /compact).
+    fn chat_turn(&self) -> bool {
+        !self.turn.as_ref().is_some_and(|t| t.replaying || t.prompt.trim_start().starts_with('/'))
     }
 
     /// A resumed session's history starts: the conversation shown is replaced by it.
@@ -511,14 +611,17 @@ impl App {
         self.stop(format!("{} could not start", self.name), clean(error).trim().to_owned(), true);
     }
 
-    /// The engine's start began (again).
+    /// The engine's start began (again). A fresh engine has none of the chat: it gets it with the
+    /// next prompt.
     pub fn starting(&mut self, now: Instant) {
         self.phase = Phase::Starting { since: now };
+        self.given = 0;
+        self.screen_given = false;
         self.dirty = true;
     }
 
     fn send_queued(&mut self, now: Instant) {
-        if self.turn.is_none() && self.phase == Phase::Ready {
+        if self.turn.is_none() && self.phase == Phase::Ready && !self.resuming {
             if let Some(text) = self.queued.pop_front() {
                 self.send_prompt(text, now);
             }
@@ -542,21 +645,92 @@ impl App {
     }
 
     pub fn send_prompt(&mut self, text: String, now: Instant) {
-        if text.trim() == "/new" && self.offers("new") {
-            self.transcript.clear();
-            self.plan.clear();
-            self.findings = [0; 5];
-            self.usage = Usage::default();
-            self.scroll = Scroll::Follow;
-        }
         self.transcript.user(&text);
-        self.echo = Some(text.clone());
         self.conversed = true;
         self.turns += 1;
         self.turn = Some(Turn { started: now, stopping: false, prompt: text.clone(), replaying: false });
         self.scroll = Scroll::Follow;
-        self.send(Command::Prompt { text });
         self.dirty = true;
+        // The engine's own commands (/compact, /review) go to it as typed, and are no part of the
+        // chat.
+        if text.trim_start().starts_with('/') {
+            self.deliver(text, None);
+            return;
+        }
+        let before = self.chat.turns.len();
+        let unseen = self.given < before || (!self.chat.screen.trim().is_empty() && !self.screen_given);
+        self.chat.user(&text);
+        if !unseen {
+            self.given = self.chat.turns.len();
+            self.deliver(text, None);
+            return;
+        }
+        // A chat this engine has not seen (it took the chat over): the earlier turns go with the
+        // prompt, the oldest as the model's notes when they do not fit whole.
+        let turns = &self.chat.turns[self.given.min(before)..before];
+        let budget = history::budget(self.spec.context_window);
+        let notes_model = self.notes_model();
+        if history::needs_notes(&self.chat, turns, budget) && notes_model.is_some() {
+            let older = history::newest(turns, budget / 2);
+            // Within the window of the model that writes the notes.
+            let own = notes_model.as_deref() == Some(self.model.as_str());
+            let room = history::notes_room(self.spec.context_window, self.spec.max_output, own);
+            let text_for_notes = history::transcript(&turns[..older], &self.chat.screen, room);
+            self.transcript.notice(Level::Info, &format!("Compacting the earlier chat for {}…", self.name));
+            self.waiting = Some(Waiting { prompt: text, since: now });
+            self.effects.push(Effect::Notes { text: text_for_notes });
+            return;
+        }
+        let context = history::context(&self.chat, turns, budget, None);
+        self.given = self.chat.turns.len();
+        self.screen_given = true;
+        self.deliver(text, context);
+    }
+
+    /// The prompt goes to the engine, after the earlier chat when it carries it.
+    fn deliver(&mut self, typed: String, context: Option<String>) {
+        let sent = match &context {
+            Some(context) => history::with_context(context, &typed),
+            None => typed.clone(),
+        };
+        self.echo = Some(sent.clone());
+        self.echo_shown = Some(typed);
+        self.send(Command::Prompt { text: sent });
+    }
+
+    /// The model that writes the notes on an earlier chat: the one in use when the relay serves
+    /// it (this inference's), else the first of this inference's.
+    pub fn notes_model(&self) -> Option<String> {
+        let served = |model: &str| self.spec.models.iter().any(|m| m == model) && !crate::spec::subscribed(model);
+        if served(&self.model) {
+            return Some(self.model.clone());
+        }
+        self.spec.models.iter().find(|model| !crate::spec::subscribed(model)).cloned()
+    }
+
+    /// The model's notes on the earlier chat came (or not): the prompt waiting for them goes to the
+    /// engine with the earlier chat. Without notes the newest turns go whole and the older are
+    /// left out, as the person is told.
+    pub fn noted(&mut self, notes: Result<String, String>, now: Instant) {
+        let Some(waiting) = self.waiting.take() else { return };
+        self.dirty = true;
+        let notes = match notes {
+            Ok(notes) => Some(notes),
+            Err(error) => {
+                self.transcript.notice(
+                    Level::Warn,
+                    &format!("Could not compact the earlier chat ({}): its newest part goes whole, the rest is left out.", clean(&error).trim()),
+                );
+                None
+            }
+        };
+        let last = self.chat.turns.len().saturating_sub(1);
+        let turns = self.chat.turns[self.given.min(last)..last].to_vec();
+        let context = history::context(&self.chat, &turns, history::budget(self.spec.context_window), notes.as_deref());
+        self.given = self.chat.turns.len();
+        self.screen_given = true;
+        let _ = now;
+        self.deliver(waiting.prompt, context);
     }
 
     /// Enter in the prompt box.
@@ -573,7 +747,8 @@ impl App {
             return;
         }
         match self.phase {
-            Phase::Ready if self.turn.is_none() => self.send_prompt(text, now),
+            // While the chat this session goes on with opens, prompts wait for it.
+            Phase::Ready if self.turn.is_none() && !self.resuming => self.send_prompt(text, now),
             Phase::Ready | Phase::Starting { .. } | Phase::Switching { .. } | Phase::Changing { .. } => {
                 self.queued.push_back(text);
             }
@@ -599,11 +774,220 @@ impl App {
                 Some(model) => self.choose_model(model, now),
                 None => self.transcript.notice(Level::Warn, &format!("There is no model {argument} here. /model lists them.")),
             },
+            "new" => self.new_chat(now),
+            "history" => self.effects.push(Effect::History),
             "help" => self.overlay = Some(Overlay::Keys { keys: keys_help(self.shift_enter), scroll: 0 }),
             "exit" | "quit" => self.request_quit(),
             _ => return false,
         }
         true
+    }
+
+    /// Saves the chat on the person's computer when something was said in it, with the session's
+    /// secrets masked as the screen masks them.
+    pub fn save_chat(&mut self) {
+        if self.chat.is_empty() {
+            return;
+        }
+        self.chat.version += 1;
+        let mut chat = self.chat.clone();
+        let mask = |text: &str| self.masker.mask(text).into_owned();
+        chat.title = mask(&chat.title);
+        chat.screen = mask(&chat.screen);
+        for turn in &mut chat.turns {
+            turn.text = mask(&turn.text);
+            turn.tools = turn.tools.iter().map(|tool| mask(tool)).collect();
+        }
+        self.effects.push(Effect::Save(Box::new(chat)));
+    }
+
+    /// A save's outcome: whether the person's computer keeps the chats. A failure is said once.
+    pub fn saved(&mut self, outcome: Result<bool, String>) {
+        match outcome {
+            Ok(kept) => self.kept = Some(kept),
+            Err(error) if !self.save_failed => {
+                self.save_failed = true;
+                self.transcript.notice(Level::Warn, &format!("This chat could not be saved: {}", clean(&error).trim()));
+                self.dirty = true;
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// Whether a chat can be started or opened now: not while a turn runs or the engine starts.
+    fn chat_free(&mut self, what: &str) -> bool {
+        if self.resuming {
+            self.transcript.notice(Level::Info, &format!("Wait until the chat this session goes on with has opened, then {what}."));
+            return false;
+        }
+        if self.busy() || self.waiting.is_some() {
+            self.transcript.notice(Level::Info, &format!("Stop the turn first (Esc), then {what}."));
+            return false;
+        }
+        if !matches!(self.phase, Phase::Ready | Phase::Stopped { .. }) {
+            self.transcript.notice(Level::Info, &format!("Wait until {} has started, then {what}.", self.name));
+            return false;
+        }
+        true
+    }
+
+    /// The engine forgets the chat it had: its own new session when it offers one, else it starts
+    /// again. Nothing when it had none of it.
+    fn engine_forgets(&mut self, had: bool, now: Instant) {
+        if !had || self.stopped() {
+            return;
+        }
+        if self.offers("new") {
+            self.quiet_new = true;
+            self.turn = Some(Turn { started: now, stopping: false, prompt: "/new".into(), replaying: false });
+            self.deliver("/new".into(), None);
+        } else if self.owns_engine {
+            // Its next Ready is the fresh engine's.
+            self.quiet_new = true;
+            self.effects.push(Effect::Renew);
+        }
+    }
+
+    /// /new: the chat is kept, and a new one starts on a fresh screen.
+    pub fn new_chat(&mut self, now: Instant) {
+        if !self.chat_free("start a new chat") {
+            return;
+        }
+        self.save_chat();
+        let had = self.given > 0 || self.screen_given;
+        self.chat = Chat::new(&self.spec.harness, &self.name, &self.model);
+        self.forget_shown();
+        self.conversed = false;
+        self.engine_forgets(had, now);
+        self.dirty = true;
+    }
+
+    /// The conversation shown, the plan, the findings and the counts go (a new or opened chat).
+    fn forget_shown(&mut self) {
+        self.given = 0;
+        self.screen_given = false;
+        self.chat_message = None;
+        self.chat_tools.clear();
+        self.transcript.clear();
+        self.plan.clear();
+        self.findings = [0; 5];
+        self.usage = Usage::default();
+        self.scroll = Scroll::Follow;
+    }
+
+    /// /history's list came: its panel opens (or what went wrong is said).
+    pub fn listed(&mut self, listing: Result<Listing, String>) {
+        self.dirty = true;
+        let listing = match listing {
+            Ok(listing) => listing,
+            Err(error) => {
+                self.transcript.notice(Level::Warn, &format!("Could not read the chats: {}", clean(&error).trim()));
+                return;
+            }
+        };
+        self.kept = Some(listing.kept);
+        if listing.chats.is_empty() {
+            self.transcript.notice(Level::Info, "No chats yet. Each chat is kept here once something is said in it.");
+            return;
+        }
+        let at = history::now();
+        let choices = listing
+            .chats
+            .iter()
+            .map(|summary| Choice {
+                id: summary.id.clone(),
+                label: if summary.title.trim().is_empty() { "Untitled chat".into() } else { self.masker.mask(&summary.title).into_owned() },
+                hint: history::hint(summary, at),
+                current: summary.id == self.chat.id,
+            })
+            .collect();
+        let title = if listing.kept { "History" } else { "History · kept in this VM only" };
+        self.overlay = Some(Overlay::picker(Which::Chats, title, choices));
+    }
+
+    /// A chat chosen in /history.
+    fn pick_chat(&mut self, id: String) {
+        self.overlay = None;
+        if id == self.chat.id {
+            return;
+        }
+        if self.chat_free("open another chat") {
+            self.effects.push(Effect::Open(id));
+        }
+    }
+
+    /// The chat opened from /history came: it is shown, and goes on here; the harness gets it with
+    /// the next prompt.
+    pub fn opened(&mut self, chat: Result<Chat, String>, now: Instant) {
+        self.dirty = true;
+        let mut chat = match chat {
+            Ok(chat) => chat,
+            Err(error) => {
+                self.transcript.notice(Level::Warn, &format!("Could not open the chat: {}", clean(&error).trim()));
+                return;
+            }
+        };
+        if chat.id == self.chat.id || !self.chat_free("open another chat") {
+            return;
+        }
+        self.save_chat();
+        let had = self.given > 0 || self.screen_given;
+        chat.entered(&self.spec.harness, &self.name, &self.model);
+        self.chat = chat;
+        self.forget_shown();
+        self.show_chat();
+        self.engine_forgets(had, now);
+    }
+
+    /// The chat this session goes on with came (a /harness switch into a new VM brought it),
+    /// whether the engine has started yet or not: it is shown and goes on here, and the engine gets
+    /// it with the first prompt, which waited for it.
+    pub fn resumed(&mut self, chat: Result<Chat, String>, now: Instant) {
+        self.resuming = false;
+        self.dirty = true;
+        match chat {
+            Ok(mut chat) => {
+                chat.entered(&self.spec.harness, &self.name, &self.model);
+                self.chat = chat;
+                self.given = 0;
+                self.screen_given = false;
+                self.chat_message = None;
+                self.chat_tools.clear();
+                self.show_chat();
+            }
+            Err(error) => {
+                self.transcript.notice(Level::Warn, &format!("Could not open the chat to go on with: {}", clean(&error).trim()));
+            }
+        }
+        self.send_queued(now);
+    }
+
+    /// The chat's turns on the screen, as they were said, under a line naming it.
+    fn show_chat(&mut self) {
+        let at = history::now();
+        let from = if self.chat.harnesses.is_empty() { self.chat.name.clone() } else { self.chat.harnesses.join(" → ") };
+        self.transcript.divider(&format!("{} · {} · {}", self.chat.title, from, history::ago(self.chat.updated, at)));
+        if self.chat.turns.is_empty() && !self.chat.screen.trim().is_empty() {
+            let lines: Vec<&str> = self.chat.screen.lines().collect();
+            let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+            self.transcript.notice(Level::Info, &format!("What it showed, at the end:\n{tail}"));
+        }
+        for (i, turn) in self.chat.turns.clone().iter().enumerate() {
+            match turn.role {
+                history::Role::User => self.transcript.user(&turn.text),
+                history::Role::Assistant => {
+                    if !turn.tools.is_empty() {
+                        self.transcript.notice(Level::Info, &format!("{} ran: {}", turn.harness, turn.tools.join(" · ")));
+                    }
+                    if !turn.text.trim().is_empty() {
+                        self.transcript.message(&format!("history-{i}"), &turn.text, None);
+                    }
+                }
+            }
+        }
+        self.transcript.end_turn();
+        self.transcript.divider(&format!("{} goes on with this chat from here", self.name));
+        self.conversed = true;
     }
 
     /// Opens the /harness panel, or goes straight to `named` (its questions, or the switch when it
@@ -614,7 +998,7 @@ impl App {
             self.transcript.notice(Level::Info, &format!("Wait until {} has started to switch harness.", self.name));
             return;
         }
-        match Flow::open(&self.spec, &self.model, named.filter(|named| !named.trim().is_empty())) {
+        match Flow::open(&self.spec, &self.switch_model(), named.filter(|named| !named.trim().is_empty())) {
             Ok((_, FlowOutcome::Start(pending))) => self.start_switch(*pending, now),
             Ok((flow, _)) => self.overlay = Some(Overlay::Switch(Box::new(flow))),
             Err(error) => self.transcript.notice(Level::Warn, &error),
@@ -678,11 +1062,13 @@ impl App {
             transcript: Some(std::mem::take(&mut self.transcript)),
             history: std::mem::take(&mut self.history),
             queued: std::mem::take(&mut self.queued),
-            note: format!("{} · {}", next.name, next.model),
+            note: format!("{} · {}", next.name, crate::spec::shown_model(&next.model)),
+            chat: Some(std::mem::take(&mut self.chat)),
         }
     }
 
-    /// What the screen before handed on (a switch): its conversation goes on here.
+    /// What the screen before handed on (a switch): its conversation goes on here, and this
+    /// harness takes the chat over with the next prompt.
     pub fn carried(&mut self, carry: super::Carry) {
         if let Some(transcript) = carry.transcript {
             self.transcript = transcript;
@@ -693,6 +1079,15 @@ impl App {
         if !carry.note.is_empty() {
             self.transcript.divider(&carry.note);
         }
+        if let Some(mut chat) = carry.chat {
+            chat.entered(&self.spec.harness, &self.spec.name, &self.spec.model);
+            if !chat.is_empty() {
+                self.transcript.notice(Level::Info, &format!("{} takes this chat over with your next message.", self.spec.name));
+            }
+            self.chat = chat;
+            self.given = 0;
+            self.screen_given = false;
+        }
     }
 
     /// Esc while work runs: asks the engine to stop the turn.
@@ -700,6 +1095,21 @@ impl App {
         // Only a turn stops: work the engine does on its own (starting its servers) goes on.
         if self.turn.is_none() || self.phase != Phase::Ready {
             return false;
+        }
+        if let Some(waiting) = self.waiting.take() {
+            // The prompt never reached the engine: it leaves the chat and goes back into the box.
+            if self.chat.turns.last().is_some_and(|turn| turn.role == history::Role::User) {
+                self.chat.turns.pop();
+            }
+            self.turn = None;
+            self.transcript.end_turn();
+            self.transcript.notice(Level::Info, "Stopped before the earlier chat was compacted.");
+            if self.input.is_empty() {
+                self.input.set(&waiting.prompt);
+            }
+            self.unqueue();
+            self.dirty = true;
+            return true;
         }
         if let Some(turn) = self.turn.as_mut() {
             turn.stopping = true;
@@ -763,7 +1173,13 @@ impl App {
                 hint: if self.modes.is_empty() { not_offered.clone() } else { mode_name },
                 enabled: !self.modes.is_empty() && self.phase == Phase::Ready,
             },
-            slash("new", "New session"),
+            Item {
+                action: Action::NewChat,
+                label: "New chat".into(),
+                hint: "this one is kept · /new".into(),
+                enabled: matches!(self.phase, Phase::Ready | Phase::Stopped { .. }) && !self.busy(),
+            },
+            Item { action: Action::History, label: "History".into(), hint: "earlier chats · /history".into(), enabled: true },
             slash("sessions", "Sessions"),
             slash("compact", "Compact"),
             Item {
@@ -798,9 +1214,95 @@ impl App {
         let choices = self
             .models
             .iter()
-            .map(|m| Choice { id: m.clone(), label: m.clone(), hint: String::new(), current: *m == self.model })
+            .map(|m| Choice {
+                id: m.clone(),
+                label: crate::spec::shown_model(m),
+                hint: match crate::spec::plan_of(m) {
+                    Some(_) => "your own subscription".into(),
+                    None => String::new(),
+                },
+                current: *m == self.model,
+            })
             .collect();
         Overlay::picker(Which::Models, "Switch model", choices)
+    }
+
+    /// How to sign in to a plan the person chose: the sign-in already in this VM, this computer's
+    /// own client's, the one Yougori kept, or signing in now. A plan whose sign-in may not travel
+    /// (Claude: spec::Plan::transferable) offers only the client's own sign-in in this VM. The
+    /// title says what the VM reaches.
+    pub fn plan_picker(&self, plan: &crate::spec::Plan, model: &str) -> Overlay {
+        let home = self.spec.env.get("HOME").map(String::as_str).unwrap_or("/home/node");
+        let here = std::path::Path::new(home).join(plan.credential).metadata().is_ok_and(|m| m.len() > 2);
+        let held = if plan.transferable {
+            self.spec.session.subscriptions.get(plan.id).cloned().unwrap_or_default()
+        } else {
+            crate::spec::PlanState::default()
+        };
+        let client = &self.name;
+        let mut choices = Vec::new();
+        if here {
+            choices.push(Choice { id: "vm".into(), label: "Use the sign-in in this VM".into(), hint: String::new(), current: true });
+        }
+        if held.computer {
+            choices.push(Choice {
+                id: "computer".into(),
+                label: "Use this computer's sign-in".into(),
+                hint: format!("from your own {client}; a renewed one comes back"),
+                current: choices.is_empty(),
+            });
+        }
+        if held.saved {
+            choices.push(Choice {
+                id: "saved".into(),
+                label: "Use the sign-in Yougori kept".into(),
+                hint: "from an earlier session".into(),
+                current: choices.is_empty(),
+            });
+        }
+        choices.push(Choice {
+            id: "sign-in".into(),
+            label: "Sign in".into(),
+            hint: plan.how.into(),
+            current: choices.is_empty(),
+        });
+        let title = format!("Your {} plan · the VM reaches {} only", plan.name, plan.sites.join(", "));
+        Overlay::picker(Which::Plan(model.to_owned()), &title, choices)
+    }
+
+    /// The person chose how to sign in to the plan of `model`: the launcher sets it up, then the
+    /// engine restarts with it.
+    fn pick_plan(&mut self, model: String, using: String, now: Instant) {
+        self.overlay = None;
+        let Some((plan, _)) = crate::spec::plan_of(&model) else { return };
+        if !matches!(self.phase, Phase::Ready | Phase::Stopped { .. }) {
+            self.transcript.notice(Level::Info, &format!("Wait until {} has started to switch models.", self.name));
+            return;
+        }
+        self.switch_from = Some(self.phase.clone());
+        self.phase = Phase::Switching { model: model.clone(), since: now, step: format!("opening {}", plan.sites.join(", ")) };
+        self.effects.push(Effect::Subscribe { plan: plan.id.into(), using, model });
+        self.dirty = true;
+    }
+
+    /// The plan is set up (its sites open, its sign-in in place): the engine restarts with it.
+    pub fn subscribed(&mut self, model: String, outcome: Result<(), String>, now: Instant) {
+        match outcome {
+            Ok(()) => {
+                self.switch_step("Preparing");
+                self.effects.push(Effect::Restart(model));
+            }
+            Err(error) => self.switch_refused(&model, &error, now),
+        }
+    }
+
+    /// The model a harness switched to starts with: the one in use, or this inference's first when
+    /// the one in use is a plan of this client's own.
+    pub fn switch_model(&self) -> String {
+        if !crate::spec::subscribed(&self.model) {
+            return self.model.clone();
+        }
+        self.models.iter().find(|model| !crate::spec::subscribed(model)).cloned().unwrap_or_else(|| self.model.clone())
     }
 
     pub fn mode_picker(&self) -> Overlay {
@@ -844,6 +1346,27 @@ impl App {
         if model == self.model && !self.stopped() {
             return;
         }
+        // A plan the person signs in to (their own subscription), which this client does not run
+        // on yet: how to sign in is asked first.
+        if let Some((plan, _)) = crate::spec::plan_of(&model) {
+            if plan.harness != self.spec.harness {
+                let client = self.spec.session.harnesses.iter().find(|h| h.id == plan.harness).map_or(plan.client, |h| h.name.as_str());
+                self.transcript.notice(
+                    Level::Info,
+                    &format!("Your {} plan works in {client}: /harness {} first.", plan.name, plan.harness),
+                );
+                return;
+            }
+            let on_it = crate::spec::plan_of(&self.model).is_some_and(|(current, _)| current.id == plan.id);
+            if !on_it {
+                if !self.owns_engine {
+                    self.transcript.notice(Level::Warn, &format!("{} cannot be started again from here.", self.name));
+                } else {
+                    self.overlay = Some(self.plan_picker(plan, &model));
+                }
+                return;
+            }
+        }
         if self.stopped() {
             if self.owns_engine {
                 self.switch_by_restart(model, now);
@@ -856,9 +1379,14 @@ impl App {
             // The engine answers with a Model event, which says "Now using …".
             ModelSwitch::Live => self.send(Command::SetModel { model }),
             ModelSwitch::Restart if self.owns_engine => {
+                let shown = crate::spec::shown_model(&model);
                 self.overlay = Some(Overlay::Confirm {
-                    detail: format!("Switching to {model} restarts {}; this conversation starts again.", self.name),
-                    title: format!("Switch to {model}?"),
+                    detail: if self.chat.is_empty() {
+                        format!("Switching to {shown} restarts {}.", self.name)
+                    } else {
+                        format!("Switching to {shown} restarts {}; it gets this chat with your next message.", self.name)
+                    },
+                    title: format!("Switch to {shown}?"),
                     what: Confirmable::SwitchModel(model),
                     yes: "switch".into(),
                 });
@@ -905,9 +1433,13 @@ impl App {
                     Action::Keys => self.overlay = Some(Overlay::Keys { keys: keys_help(self.shift_enter), scroll: 0 }),
                     Action::Quit => self.request_quit(),
                     Action::Restart => self.effects.push(Effect::Start),
+                    Action::NewChat => self.new_chat(now),
+                    Action::History => self.effects.push(Effect::History),
                     Action::SendCtrlP => {}
                 }
             }
+            Outcome::Pick(Which::Chats, id) => self.pick_chat(id),
+            Outcome::Pick(Which::Plan(model), using) => self.pick_plan(model, using, now),
             Outcome::Pick(Which::Models, model) => self.choose_model(model, now),
             Outcome::Pick(Which::Modes, mode) => {
                 self.overlay = None;
@@ -966,7 +1498,16 @@ impl App {
         self.session = None;
         self.usage = Usage::default();
         self.plan.clear();
-        self.transcript.divider(&format!("{} restarted with {model}. The conversation starts again.", self.name));
+        // The new engine has none of the chat: it gets it with the next prompt.
+        self.given = 0;
+        self.screen_given = false;
+        self.chat.model = model.to_owned();
+        let shown = crate::spec::shown_model(model);
+        if self.chat.is_empty() {
+            self.transcript.divider(&format!("{} restarted with {shown}. The conversation starts again.", self.name));
+        } else {
+            self.transcript.divider(&format!("{} restarted with {shown}. It gets this chat with your next message.", self.name));
+        }
         self.phase = Phase::Starting { since: now };
         self.dirty = true;
     }
@@ -986,7 +1527,7 @@ impl App {
     /// was (an engine that runs keeps its turn and open requests; a stopped one stays stopped),
     /// and prompts typed meanwhile go when the engine can take them.
     pub fn switch_refused(&mut self, model: &str, error: &str, now: Instant) {
-        self.transcript.notice(Level::Error, &format!("Could not switch to {model}: {}", clean(error).trim()));
+        self.transcript.notice(Level::Error, &format!("Could not switch to {}: {}", crate::spec::shown_model(model), clean(error).trim()));
         let before = self.switch_from.take();
         // The engine may have stopped meanwhile (its Exit says so): that stays.
         if matches!(self.phase, Phase::Switching { .. }) {
@@ -996,22 +1537,25 @@ impl App {
         self.dirty = true;
     }
 
-    /// The new engine did not start; the old one was started again.
+    /// The new engine did not start; the old one was started again, fresh: it gets the chat with
+    /// the next prompt.
     pub fn switch_reverted(&mut self, model: &str, error: &str, now: Instant) {
+        use crate::spec::shown_model;
         self.transcript.notice(
             Level::Error,
-            &format!("Could not start {} with {model}: {}. Back on {}.", self.name, clean(error).trim(), self.model),
+            &format!("Could not start {} with {}: {}. Back on {}.", self.name, shown_model(model), clean(error).trim(), shown_model(&self.model)),
         );
-        self.phase = Phase::Starting { since: now };
-        self.dirty = true;
+        self.starting(now);
     }
 
     /// Neither the new model nor the old one started.
     pub fn switch_failed(&mut self, model: &str, error: &str, again: &str) {
+        use crate::spec::shown_model;
         let message = format!(
-            "With {model}: {}. With {} again: {}. Press Enter to try again, or Ctrl+P to choose another model.",
+            "With {}: {}. With {} again: {}. Press Enter to try again, or Ctrl+P to choose another model.",
+            shown_model(model),
             clean(error).trim(),
-            self.model,
+            shown_model(&self.model),
             clean(again).trim()
         );
         self.stop(format!("{} could not start", self.name), message, true);
@@ -1037,6 +1581,8 @@ pub fn keys_help(shift_enter: bool) -> Vec<(String, String)> {
         ("/", "commands: Yougori's, then the harness's own"),
         ("/harness", "switch to another harness (/harness NAME)"),
         ("/model", "switch model (/model ID)"),
+        ("/new", "start a new chat; this one is kept"),
+        ("/history", "open an earlier chat, from any harness"),
         ("/help", "these keys and commands"),
         ("/exit", "end the session"),
         ("pgup pgdn", "scroll the conversation"),

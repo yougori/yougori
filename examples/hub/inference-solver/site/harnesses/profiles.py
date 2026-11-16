@@ -391,6 +391,49 @@ default = "solver"
         # token is passed to it. The real service credential is never here.
         env["CLINE_TELEMETRY_DISABLED"] = "1"
         return ["/opt/solver/tool/node_modules/cline/bin/cline", "--config", str(root / ".cline"), "--provider", "openai", "--model", model], env
+    if harness in OWN_CLIENTS or harness in KITS:
+        # The tokenizer tables tiktoken would fetch from the internet are in the image.
+        env["TIKTOKEN_CACHE_DIR"] = TIKTOKEN_TABLES
+    if harness == "mini":
+        # mini-SWE-agent's own terminal, set up already (no first-run wizard), on the relay through
+        # LiteLLM, which knows no price for this model (cost tracking would stop it) and no limit.
+        env.update({"MSWEA_CONFIGURED": "true", "MSWEA_COST_TRACKING": "ignore_errors", "MSWEA_SILENT_STARTUP": "1",
+                    "MSWEA_GLOBAL_CONFIG_DIR": str(root / ".config/mini-swe-agent")})
+        return ["mini", "-m", "openai/" + model, "-c", "mini.yaml", "-c", "model.model_kwargs.api_base=" + BASE,
+                "-c", "model.model_kwargs.max_tokens=%d" % reply, "-l", "0"], env
+    if harness == "continue":
+        # Continue's own terminal (cn) from a local config: the relay as its one model, with this
+        # model's window and reply budget, and no hub sign-in.
+        config = write(root, ".continue/config.yaml", "\n".join([
+            "name: Yougori", "version: 1.0.0", "schema: v1", "models:",
+            "  - name: %s" % quote(model), "    provider: openai", "    model: %s" % quote(model),
+            "    apiBase: %s" % quote(BASE), "    apiKey: %s" % quote(LOCAL_KEY), "    roles: [chat, edit, apply, summarize]",
+            "    defaultCompletionOptions:", "      contextLength: %d" % window, "      maxTokens: %d" % reply, ""]))
+        env.update({"CONTINUE_ALLOW_ANONYMOUS_TELEMETRY": "0", "CONTINUE_GLOBAL_DIR": str(root / ".continue")})
+        return ["cn", "--config", config], env
+    if harness == "openclaw":
+        # OpenClaw's own local terminal (openclaw chat: its embedded agent, no gateway), its one
+        # provider the relay, with this model's window and reply budget, working in the workspace.
+        write(root, ".openclaw/openclaw.json", {
+            "models": {"mode": "merge", "providers": {"yougori": {"baseUrl": BASE, "apiKey": LOCAL_KEY, "api": "openai-completions",
+                "models": [{"id": mid, "name": mid, "contextWindow": sized[mid][0], "maxTokens": sized[mid][1], "reasoning": False,
+                            "input": ["text"]} for mid in ids]}}},
+            "agents": {"defaults": {"model": {"primary": "yougori/" + model}, "workspace": "/workspace"}}})
+        return ["openclaw", "chat"], env
+    if harness == "holmes":
+        # HolmesGPT's own interactive terminal. LiteLLM knows nothing of this model, so it is told the
+        # window and the reply budget; it asks before each command it has not been allowed.
+        env.update({"OVERRIDE_MAX_CONTENT_SIZE": str(window), "OVERRIDE_MAX_OUTPUT_TOKEN": str(reply),
+                    "ENABLE_TELEMETRY": "false"})
+        return ["holmes", "ask", "--model", "openai/" + model, "--interactive"], env
+    if harness in KITS:
+        # Yougori's terminal (agent_kit.py) around the harness's own engine (kits/NAME.py), in the
+        # harness's venv. -I keeps the workspace off its import path, as for PentestGPT. The terminal
+        # takes the harness's colours by its id (terminal_ui.py BRANDS).
+        env.update(KIT_ENV.get(harness, {}))
+        env["SOLVER_HARNESS"] = harness
+        return [KIT_PYTHONS.get(harness, KIT_PYTHON), "-I", AGENT_KIT, harness, "--model", model, "--context-window", str(window),
+                "--max-output", str(reply)], env
     raise ValueError("This harness does not yet have a validated isolated launch profile.")
 
 
@@ -405,6 +448,47 @@ NAMES = {"yougori": "Yougori", "opencode": "OpenCode", "kilo": "Kilo", "codex": 
          "plandex": "Plandex", "strix": "Strix", "shannon": "Shannon", "pentagi": "PentAGI", "pentestgpt": "PentestGPT",
          "hexstrike": "HexStrike"}
 SECURITY = {"strix", "shannon", "pentagi", "pentestgpt", "hexstrike"}
+# The harnesses whose engine runs in Yougori's terminal (agent_kit.py, a kit each in kits/), each
+# with its name and its category on the website (site/categories.json): the agent frameworks and
+# the libraries built for a kind of work, which bring no terminal of their own.
+KITS = {
+    "langgraph": ("LangGraph", "agents"), "deepagents": ("Deep Agents", "agents"), "crewai": ("CrewAI", "agents"),
+    "smolagents": ("smolagents", "agents"), "strands": ("Strands Agents", "agents"), "adk": ("Google ADK", "agents"),
+    "agentframework": ("Microsoft Agent Framework", "agents"),
+    "vanna": ("Vanna", "data"),
+    "gptresearcher": ("GPT Researcher", "research"), "opendeepresearch": ("Open Deep Research", "research"),
+    "paperqa": ("PaperQA2", "research"),
+    "tradingagents": ("TradingAgents", "finance"),
+    "pipecat": ("Pipecat", "service"),
+    "eigent": ("Eigent", "office"), "browseruse": ("Browser Use", "office"),
+    "taskweaver": ("TaskWeaver", "data"), "pandasai": ("PandasAI", "data"),
+    "geoagent": ("GeoAgent", "science"), "chemcrow": ("ChemCrow", "science"),
+    "deerflow": ("DeerFlow", "research"), "biomni": ("Biomni", "science"), "openmanus": ("OpenManus", "office"),
+    "finrobot": ("FinRobot", "finance"), "livekit": ("LiveKit Agents", "service"),
+    "agenttars": ("Agent TARS", "office"), "stagehand": ("Stagehand", "office"),
+}
+# The new harnesses that bring their own terminal client, shown in the screen's pane as it is.
+OWN_CLIENTS = {"mini": ("mini-SWE-agent", "coding"), "holmes": ("HolmesGPT", "operations"),
+               "continue": ("Continue", "coding"), "openclaw": ("OpenClaw", "office")}
+NAMES.update({harness: name for harness, (name, _) in {**KITS, **OWN_CLIENTS}.items()})
+CATEGORIES = {harness: category for harness, (_, category) in {**KITS, **OWN_CLIENTS}.items()}
+KIT_PYTHON = "/opt/solver/tool/bin/python"
+# tiktoken's tables (cl100k, o200k), fetched when the image is built (Containerfile.yougori).
+TIKTOKEN_TABLES = "/opt/solver/tiktoken"
+# A kit whose engine is a Node program (its pack holds no Python) runs on the image's own Python: its
+# kit uses the standard library only.
+KIT_PYTHONS = {"agenttars": "/usr/local/bin/python3"}
+AGENT_KIT = "/opt/solver/agent_kit.py"
+# A kit's own environment: what its library reads to stay quiet and offline.
+KIT_ENV = {
+    "crewai": {"CREWAI_DISABLE_TELEMETRY": "true", "OTEL_SDK_DISABLED": "true", "CREWAI_TRACING_ENABLED": "false",
+               "CREWAI_DISABLE_TRACKING": "true"},
+    "adk": {"GOOGLE_GENAI_USE_VERTEXAI": "FALSE"},
+    "smolagents": {"HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1"},
+    "strands": {"OTEL_SDK_DISABLED": "true"},
+    "browseruse": {"ANONYMIZED_TELEMETRY": "false", "BROWSER_USE_SETUP_LOGGING": "false", "PYDANTIC_AI_NO_BANNER": "1"},
+    "eigent": {"CAMEL_TELEMETRY": "false"},
+}
 RESPEC = ["python3", "/opt/solver/runtime.py", "engine"]
 # The screen's switch command (its /harness): runtime.py switch, given the request on stdin.
 SWITCH = ["python3", "/opt/solver/runtime.py", "switch"]
@@ -439,6 +523,62 @@ AIDER_FILES = ".aider"
 AIDER_START = ("import os, sys; from aider.repomap import RepoMap; "
                "RepoMap.TAGS_CACHE_DIR = os.path.join(os.environ['SOLVER_AIDER_FILES'], os.path.basename(RepoMap.TAGS_CACHE_DIR)); "
                "from aider.main import main; sys.argv[0] = 'aider'; sys.exit(main())")
+
+
+# The plans a person signs in to in a harness's own client: Claude Code with their Claude
+# subscription, Codex with their ChatGPT subscription. Their model ids start with SUBSCRIPTION
+# ("subscription:claude/sonnet"); the relay never serves them. The client reaches its provider
+# itself, through the VM's proxy for chosen sites (vm_tunnel.py), which the launcher opens to the
+# provider's sites alone once the person chose the plan in the screen (vm_host.SUBSCRIPTION_SITES).
+# Its sign-in is kept in the client's own file in the harness's home (`credential`): taken from the
+# person's computer, kept by Yougori from an earlier sign-in, or made in the VM with the client's
+# own sign-in (`sign_in`), which the screen runs in its terminal pane first.
+SUBSCRIPTION = "subscription:"
+SUBSCRIPTIONS = {
+    "claude": {"harness": "claude", "plan": "Claude", "models": ("default", "sonnet", "opus", "haiku"), "window": 200000,
+               "reply": 32000, "credential": ".claude/.credentials.json", "sign_in": ["claude", "auth", "login"]},
+    "chatgpt": {"harness": "codex", "plan": "ChatGPT", "models": ("default",), "window": 272000, "reply": 32000,
+                "credential": ".codex/auth.json", "sign_in": ["codex", "login", "--device-auth"]},
+}
+# The VM's proxy for chosen sites (vm_tunnel.PROXY_PORT), which a subscription's client goes through.
+SITES_PROXY = "http://127.0.0.1:3128"
+
+
+def subscription(model):
+    """(plan, the model's name there) for a subscription's model id, else None."""
+    if not isinstance(model, str) or not model.startswith(SUBSCRIPTION):
+        return None
+    plan, _, name = model[len(SUBSCRIPTION):].partition("/")
+    name = name or "default"
+    if plan not in SUBSCRIPTIONS or name not in SUBSCRIPTIONS[plan]["models"]:
+        return None
+    return plan, name
+
+
+def subscription_models(harness):
+    """The subscription model ids `harness`'s client signs in to (none for most harnesses)."""
+    return [SUBSCRIPTION + plan + "/" + name for plan, info in SUBSCRIPTIONS.items() if info["harness"] == harness
+            for name in info["models"]]
+
+
+def signed_in(plan, root):
+    """Whether the harness's home holds the plan's sign-in (the client's own file)."""
+    try:
+        return (Path(root) / SUBSCRIPTIONS[plan]["credential"]).stat().st_size > 2
+    except OSError:
+        return False
+
+
+def subscription_environment(root):
+    """A subscription client's environment: the harness's fresh home, none of the relay's
+    variables, and the VM's proxy for its provider's sites."""
+    env = environment(root)
+    for name in ("SOLVER_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "LITELLM_LOCAL_MODEL_COST_MAP"):
+        env.pop(name, None)
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        env[name] = SITES_PROXY
+    env["NO_PROXY"] = env["no_proxy"] = "127.0.0.1,localhost"
+    return env
 
 
 def reach_of(text):
@@ -649,6 +789,22 @@ def _acp(command, switch):
 
 
 def _codex(spec, model, catalog, root, run):
+    plan = subscription(model)
+    if plan:
+        # The person's ChatGPT subscription: Codex's own provider and sign-in (auth.json in its
+        # home), through the VM's proxy; its default model for the plan unless one is named.
+        env = subscription_environment(root)
+        env["CODEX_HOME"] = str(Path(root) / ".codex")
+        name = plan[1]
+        # The sign-in in auth.json (never a keyring the VM does not have), which Yougori keeps.
+        write(Path(root), ".codex/config.toml", ("" if name == "default" else "model = %s\n" % json.dumps(name))
+              + 'web_search = "disabled"\ncheck_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n'
+              + '[analytics]\nenabled = false\n[feedback]\nenabled = false\n')
+        spec.update(protocol="codex-app-server", env=env, model_switch="restart", engine_model="" if name == "default" else name,
+                    argv=["codex", "app-server", "-c", 'sandbox_mode="danger-full-access"'])
+        if not signed_in("chatgpt", root):
+            spec["sign_in"] = list(SUBSCRIPTIONS["chatgpt"]["sign_in"])
+        return
     _, env = configure("codex", model, catalog, root)
     # The VM is the boundary: Codex's own sandbox (bubblewrap, which cannot always start in the
     # VM) is not used. How much it asks is the screen's mode, set per thread and turn.
@@ -656,12 +812,30 @@ def _codex(spec, model, catalog, root, run):
                 argv=["codex", "app-server", "-c", 'sandbox_mode="danger-full-access"'])
 
 
+CLAUDE_HEADLESS = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                   "--include-partial-messages", "--permission-prompt-tool", "stdio"]
+
+
 def _claude(spec, model, catalog, root, run):
+    plan = subscription(model)
+    if plan:
+        # The person's Claude subscription: Claude Code's own sign-in (.credentials.json in its
+        # config folder) and Anthropic's API, through the VM's proxy; the plan's default model
+        # unless one is named.
+        env = subscription_environment(root)
+        env.update({"CLAUDE_CONFIG_DIR": str(Path(root) / ".claude"), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                    "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"})
+        name = plan[1]
+        # No settings of the relay's: Claude Code's own provider.
+        write(Path(root), ".claude/settings.json", {} if name == "default" else {"model": name})
+        spec.update(protocol="claude-stream-json", env=env, model_switch="restart", engine_model="" if name == "default" else name,
+                    argv=CLAUDE_HEADLESS + ([] if name == "default" else ["--model", name]) + ["--setting-sources", "user"])
+        if not signed_in("claude", root):
+            spec["sign_in"] = list(SUBSCRIPTIONS["claude"]["sign_in"])
+        return
     _, env = configure("claude", model, catalog, root)
     spec.update(protocol="claude-stream-json", env=env, model_switch="live",
-                argv=["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                      "--include-partial-messages", "--permission-prompt-tool", "stdio", "--model", model,
-                      "--setting-sources", "user"])
+                argv=CLAUDE_HEADLESS + ["--model", model, "--setting-sources", "user"])
 
 
 def _pi(spec, model, catalog, root, run):
@@ -806,6 +980,19 @@ def _pentestgpt(spec, answers, root):
     spec["argv"] = [*SHOW_FIRST, shown, "--", *spec["argv"]]
 
 
+def _kit(spec, model, catalog, root, run):
+    """A harness whose engine runs in Yougori's terminal (agent_kit.py): its setup answers as one JSON
+    object, and the reach, so its tools know whether the web is there."""
+    _terminal(spec, model, catalog, root, run)
+    answers = {key: value for key, value in spec["answers"].items() if isinstance(value, (str, bool, int, float, list))}
+    if answers:
+        spec["argv"] += ["--answers", json.dumps(answers, separators=(",", ":"))]
+    _reach(spec)
+    # Yougori's terminal takes an earlier chat over (the screen writes it, YOUGORI_CONTEXT_FILE) and
+    # tells the screen its turns, for the person's history.
+    spec["env"]["YOUGORI_TAKES_CONTEXT"] = "1"
+
+
 # Our ACP bridges (bridges/NAME_acp.py) drive the real engines of the harnesses that speak no
 # protocol of their own, in the harness's own venv. The bridge takes this inference's models and
 # window, then after `--` the arguments configure() gives the harness's terminal client (its
@@ -848,6 +1035,8 @@ HEADLESS = {
     "pentagi": _security(_pentagi),
     "pentestgpt": _security(_pentestgpt),
     "hexstrike": _security(_hexstrike),
+    **{harness: _kit for harness in KITS},
+    **{harness: _terminal for harness in OWN_CLIENTS},
 }
 
 
@@ -858,11 +1047,17 @@ def headless(harness, model, catalog, root, answers=None, cwd=None, reach=None, 
     entry = HEADLESS.get(harness)
     if entry is None:
         raise ValueError("%s cannot run in the Yougori harness yet: it has no headless profile." % NAMES.get(harness, harness))
-    ids = catalog_ids(model, catalog)
-    window, reply = limits(model, catalog)
+    plan = subscription(model)
+    if plan and SUBSCRIPTIONS[plan[0]]["harness"] != harness:
+        raise ValueError("Your %s subscription works in %s only." % (SUBSCRIPTIONS[plan[0]]["plan"],
+                                                                     NAMES[SUBSCRIPTIONS[plan[0]]["harness"]]))
+    # A harness whose client signs in to a plan lists the plan's models beside this inference's.
+    ids = ([item["id"] for item in catalog] if plan else catalog_ids(model, catalog)) + subscription_models(harness)
+    window, reply = (SUBSCRIPTIONS[plan[0]]["window"], SUBSCRIPTIONS[plan[0]]["reply"]) if plan else limits(model, catalog)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    spec = {"harness": harness, "name": NAMES.get(harness, harness), "category": "security" if harness in SECURITY else "coding",
+    spec = {"harness": harness, "name": NAMES.get(harness, harness),
+            "category": "security" if harness in SECURITY else CATEGORIES.get(harness, "coding"),
             "protocol": "", "argv": [], "env": {}, "secret_env": {}, "cwd": str(cwd or os.getcwd()), "model": model,
             "models": ids, "model_switch": "restart", "respec": RESPEC + [harness], "profile": None, "mcp": [],
             "services": [], "context_window": window, "max_output": reply, "base_url": BASE, "api_key": LOCAL_KEY,

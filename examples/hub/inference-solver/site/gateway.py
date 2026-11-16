@@ -299,6 +299,95 @@ def assemble(chunks, model):
             **({"usage": usage} if usage else {}), **({"timings": timings} if timings else {})}
 
 
+class Reply:
+    """A reply on its way to the caller: whether its stream began, and its usage and timings."""
+
+    def __init__(self):
+        self.sent, self.usage, self.timings = False, None, None
+
+
+def relay(handler, response, model, streaming, answering, reply):
+    """The model's streamed reply to the caller, as a stream when it asked for one, else the
+    completion assembled from it; `reply` records what went."""
+    if "text/event-stream" not in response.getheader("Content-Type", "").lower():
+        raise UpstreamError("The model server did not return an event stream.", 502)
+    if streaming:
+        handler.begin(200, "text/event-stream; charset=utf-8")
+        reply.sent = True
+        for chunk in read_stream(response, answering):
+            if "model" in chunk:
+                chunk["model"] = model
+            if isinstance(chunk.get("usage"), dict):
+                reply.usage = chunk["usage"]
+            if isinstance(chunk.get("timings"), dict):
+                reply.timings = chunk["timings"]
+            handler.wfile.write(b"data: " + json.dumps(chunk, allow_nan=False).encode() + b"\n\n")
+            handler.wfile.flush()
+        handler.wfile.write(b"data: [DONE]\n\n")
+        handler.wfile.flush()
+    else:
+        result = assemble(read_stream(response, answering), model)
+        reply.usage, reply.timings = result.get("usage"), result.get("timings")
+        handler.json(200, result)
+
+
+def failed(handler, error, reply):
+    """A reply that could not be finished: an error event in a stream that began, else an error.
+    Whether the caller had gone (the request then counts as cancelled)."""
+    message = str(error) if isinstance(error, UpstreamError) else "The model server returned an incomplete response."
+    if reply.sent:
+        try:
+            handler.wfile.write(b"event: error\ndata: " + json.dumps({"error": {"message": message}}).encode() + b"\n\n")
+            handler.wfile.flush()
+        except OSError:
+            return True
+    else:
+        handler.error(error.status if isinstance(error, UpstreamError) else 502, message)
+    return False
+
+
+def own(handler, key, payload, model, route):
+    """A request for a model of one of the person's own APIs (apis.py): to that API with their key,
+    at its address on the public internet, streamed back. Nothing is charged here; the request is
+    recorded in their usage. An API that takes no stream_options is asked once more without."""
+    service = handler.server.service
+    options = payload.get("stream_options", {})
+    if not isinstance(options, dict):
+        return handler.error(400, "stream_options must be an object.")
+    if not service.inference_slots.acquire(blocking=False):
+        return handler.error(429, "This service is at capacity. Retry shortly.", retry=True)
+    request_id, started, status, reply = secrets.token_hex(16), time.time(), "failed", Reply()
+    connection = response = None
+    streaming = payload.get("stream") is True
+    body = {**payload, "model": route["upstream"], "stream": True, "stream_options": {**options, "include_usage": True}}
+    try:
+        for attempt in (1, 2):
+            connection, response = connect(route["url"], route["secret"], "/chat/completions", body, timeout=120,
+                                           expect=(200, 400), public=True)
+            if response.status != 400:
+                break
+            error = refusal(connection, response, route["secret"])
+            connection = response = None
+            if attempt == 2 or "stream_options" not in body:
+                raise error
+            body = {name: value for name, value in body.items() if name != "stream_options"}
+        relay(handler, response, model, streaming, time.time(), reply)
+        status = "completed"
+    except (BrokenPipeError, ConnectionResetError):
+        status = "cancelled"
+    except (UpstreamError, OSError, ValueError, http.client.HTTPException) as error:
+        if failed(handler, error, reply):
+            status = "cancelled"
+    finally:
+        if response is not None:
+            response.close()
+        if connection:
+            connection.close()
+        service.inference_slots.release()
+        service.store.request_done(request_id, key, model, started, status, reply.usage,
+                                   replica={"endpoint": "api:" + route["id"], "source": "your API"})
+
+
 def complete(handler, key, payload):
     service = handler.server.service
     model = payload.get("model")
@@ -314,6 +403,10 @@ def complete(handler, key, payload):
     for name in ("max_tokens", "max_completion_tokens"):
         if name in payload and (type(payload[name]) is not int or not 1 <= payload[name] <= 131072):
             return handler.error(400, name + " must be an integer from 1 to 131072.")
+    # A model of one of the person's own APIs goes there, with their key.
+    route = service.apis.route(key["user_id"], model) if getattr(service, "apis", None) else None
+    if route:
+        return own(handler, key, payload, model, route)
     session = routing.session_key(key, payload, handler.headers)
     replicas = service.router.replicas(service.store, model)
     if not replicas:
@@ -343,9 +436,8 @@ def complete(handler, key, payload):
         return handler.error(503, "The model server is not currently available.")
     if not service.inference_slots.acquire(blocking=False):
         return handler.error(429, "This service is at capacity. Retry shortly.", retry=True)
-    request_id, started, status, usage, timings = secrets.token_hex(16), time.time(), "failed", None, None
+    request_id, started, status, reply = secrets.token_hex(16), time.time(), "failed", Reply()
     connection = response = replica = None
-    sent = False
     try:
         if not service.payments.reserve(key['user_id'],model,request_id,payload):
             return handler.error(402, service.payments.refusal(key['user_id'], model))
@@ -362,40 +454,13 @@ def complete(handler, key, payload):
         payload = {**payload, "stream": True, "stream_options": {**options, "include_usage": True}}
         connection, response, replica = dispatch(service, order, payload, session)
         # The reply's time limit starts when a replica answers, after any failed replicas and queue time.
-        answering = time.time()
-        if "text/event-stream" not in response.getheader("Content-Type", "").lower():
-            raise UpstreamError("The model server did not return an event stream.", 502)
-        if streaming:
-            handler.begin(200, "text/event-stream; charset=utf-8")
-            sent = True
-            for chunk in read_stream(response, answering):
-                if "model" in chunk:
-                    chunk["model"] = model
-                if isinstance(chunk.get("usage"), dict):
-                    usage = chunk["usage"]
-                if isinstance(chunk.get("timings"), dict):
-                    timings = chunk["timings"]
-                handler.wfile.write(b"data: " + json.dumps(chunk, allow_nan=False).encode() + b"\n\n")
-                handler.wfile.flush()
-            handler.wfile.write(b"data: [DONE]\n\n")
-            handler.wfile.flush()
-        else:
-            result = assemble(read_stream(response, answering), model)
-            usage, timings = result.get("usage"), result.get("timings")
-            handler.json(200, result)
+        relay(handler, response, model, streaming, time.time(), reply)
         status = "completed"
     except (BrokenPipeError, ConnectionResetError):
         status = "cancelled"
     except (UpstreamError, OSError, ValueError, http.client.HTTPException) as error:
-        message = str(error) if isinstance(error, UpstreamError) else "The model server returned an incomplete response."
-        if sent:
-            try:
-                handler.wfile.write(b"event: error\ndata: " + json.dumps({"error": {"message": message}}).encode() + b"\n\n")
-                handler.wfile.flush()
-            except OSError:
-                status = "cancelled"
-        else:
-            handler.error(error.status if isinstance(error, UpstreamError) else 502, message)
+        if failed(handler, error, reply):
+            status = "cancelled"
     finally:
         with service.control.lock:
             service.control.active.discard(request_id)
@@ -408,6 +473,7 @@ def complete(handler, key, payload):
         if replica:
             service.router.end(replica["id"])
         service.inference_slots.release()
-        cached = routing.cached_tokens(usage, timings)
+        usage = reply.usage
+        cached = routing.cached_tokens(usage, reply.timings)
         service.payments.finish(request_id,status == 'completed',usage,cached=cached,
             record=lambda db:service.store.request_done(request_id,key,model,started,status,usage,db=db,replica=replica,cached=cached))

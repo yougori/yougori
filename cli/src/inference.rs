@@ -177,7 +177,8 @@ struct Options {
     extra: Vec<String>,
 }
 
-/// The harnesses this CLI's launcher can start (its packages.json).
+/// The harnesses this CLI's launcher can start (its packages.json). One a website does not offer
+/// (packages.json "blocked": its pack is not built) is refused by the website, with the reason.
 fn launcher_harnesses() -> Vec<String> {
     serde_json::from_str::<Value>(PACKAGES)
         .ok()
@@ -3836,6 +3837,14 @@ mod tests {
     fn listed() -> Vec<u8> {
         let mut entries: Vec<Value> =
             serde_json::from_str(include_str!("../../examples/hub/inference-solver/site/harnesses.json")).unwrap();
+        // Strix is not offered at present (the Caido proxy it runs needs Caido Labs' permission to
+        // be passed on), but these tests keep it as their security harness: PentestGPT's entry, with
+        // the same questions and size as Strix's, under Strix's name.
+        let mut strix = entries.iter().find(|entry| entry["id"] == "pentestgpt").cloned().unwrap();
+        strix["id"] = json!("strix");
+        strix["name"] = json!("Strix");
+        strix["mark"] = json!("SX");
+        entries.push(strix);
         for entry in &mut entries {
             entry["offered"] = json!(true);
             entry["setup"] = json!({"available": true, "reason": "", "version": "1"});
@@ -3879,7 +3888,11 @@ mod tests {
     #[test]
     fn the_catalogue_gives_every_harness_its_questions_and_size() {
         let catalogue = harnesses(&listed()).unwrap();
-        assert_eq!(catalogue.len(), 22);
+        // Every harness of the website's catalogue: coding, security and every other kind of work.
+        let website: Vec<Value> = serde_json::from_str(include_str!("../../examples/hub/inference-solver/site/harnesses.json")).unwrap();
+        // listed() adds the tests' Strix to the website's catalogue.
+        assert_eq!(catalogue.len(), website.len() + 1);
+        assert!(website.len() >= 50, "{}", website.len());
         assert_eq!(catalogue[0].id, YOUGORI);
         // Yougori's own agent starts once this launcher has its package.
         assert_eq!(catalogue[0].ready, launcher_harnesses().contains(&YOUGORI.to_owned()));

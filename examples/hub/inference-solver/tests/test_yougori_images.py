@@ -39,7 +39,11 @@ loader.loader.exec_module(builder)
 SPECS = harness_download.catalog()
 BASE, CHROMIUM, PACK, SHANNON = "a" * 64, "b" * 64, "c" * 64, "d" * 64
 # What Containerfile.yougori's pack stage copies in: the installer and the adapter sources.
-PACK_FILES = {"installer.py", "install_shannon.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go"}
+# The pack stage's files: the installer and the kinds' helpers, and the pack's licences (pack_licenses.py,
+# the standard licence texts and Yougori's stand-ins).
+PACK_FILES = {"installer.py", "install_shannon.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go", "pack_licenses.py"} | {
+    path.relative_to(SITE / "harnesses").as_posix() for folder in ("licenses/texts", "licenses/stand-ins")
+    for path in (SITE / "harnesses" / folder).rglob("*") if path.is_file()}
 
 
 def listing(**changes):
@@ -182,9 +186,9 @@ class Listing(unittest.TestCase):
         own = [name for name in names if name != YOUGORI]
         self.assertTrue(all(harness_download.held(name)["available"] for name in names))
         self.assertTrue(all(harness_download.availability(name)["available"] for name in own))
-        unpublish_catalog_fixtures(self.temp.name, ["strix", "aider"])
-        self.assertEqual([name for name in names if not harness_download.held(name)["available"]], ["aider", "strix"])
-        self.assertEqual([name for name in own if not harness_download.availability(name)["available"]], ["aider", "strix"])
+        unpublish_catalog_fixtures(self.temp.name, ["shannon", "aider"])
+        self.assertEqual([name for name in names if not harness_download.held(name)["available"]], ["aider", "shannon"])
+        self.assertEqual([name for name in own if not harness_download.availability(name)["available"]], ["aider", "shannon"])
         self.assertTrue(harness_download.held(YOUGORI)["available"])
         unpublish_catalog_fixtures(self.temp.name)
         self.assertEqual({harness_download.held(name)["reason"] for name in names}, {UNPUBLISHED})
@@ -308,19 +312,20 @@ class Website(unittest.TestCase):
     def test_the_images_list_and_serve_only_what_offered_harnesses_need(self):
         status, image, _ = self.flow.call("/api/harness-image/yougori")
         self.assertEqual(status, 200)
-        self.assertEqual(set(image["packs"]), set(SPECS))
+        # Every pack but those not offered (packages.json "blocked").
+        self.assertEqual(set(image["packs"]), {name for name, spec in SPECS.items() if not spec.get("blocked")})
         self.assertEqual(self.download("/api/harness-image/yougori/" + self.digest), (200, RAW))
         self.assertEqual(self.download("/api/harness-image/yougori/" + self.digest + "/tool"), (200, RAW))
         self.assertEqual(self.download("/api/harness-image/yougori/" + "e" * 64)[0], 404)
         self.assertEqual(self.download("/api/harness-image/yougori/" + self.digest + "/other")[0], 400)
         # Yougori's own agent hidden: the others still start inside the Yougori harness.
-        self.assertEqual(self.flow.call("/api/admin/choices", {"home": "harnesses", "harnesses": ["strix", "pi"]}, self.flow.admin)[0], 200)
+        self.assertEqual(self.flow.call("/api/admin/choices", {"home": "harnesses", "harnesses": ["pentestgpt", "pi"]}, self.flow.admin)[0], 200)
         image = self.flow.call("/api/harness-image/yougori")[1]
-        self.assertEqual((set(image["packs"]), set(image["bases"])), ({"strix", "pi"}, {"base"}))
+        self.assertEqual((set(image["packs"]), set(image["bases"])), ({"pentestgpt", "pi"}, {"base"}))
         self.assertEqual(self.download("/api/harness-image/yougori/" + self.digest + "/tool"), (200, RAW))
         self.assertEqual(self.flow.call("/api/harness-image/aider")[1]["error"]["message"], NOT_OFFERED)
         # A listing without the offered harnesses' packs serves none of its files.
-        unpublish_catalog_fixtures(self.folder, ["strix", "pi"])
+        unpublish_catalog_fixtures(self.folder, ["pentestgpt", "pi"])
         code, body, _ = self.flow.call("/api/harness-image/yougori")
         self.assertEqual((code, body["error"]["message"]), (404, NOT_OFFERED))
         self.assertEqual(self.download("/api/harness-image/yougori/" + self.digest)[0], 404)
@@ -534,6 +539,7 @@ class Build(unittest.TestCase):
         root = self.root / "context"
         root.mkdir()
         for name in PACK_FILES | {"Containerfile.yougori"}:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SITE / "harnesses" / name, root / name)
         return root
 
@@ -625,6 +631,7 @@ class Build(unittest.TestCase):
         (mounted / "opt/solver").mkdir(parents=True)
         files = builder.pack_stage()["files"]
         for name in files:
+            (mounted / "opt/solver" / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SITE / "harnesses" / name, mounted / "opt/solver" / name)
         calls = []
 
@@ -746,9 +753,11 @@ class Build(unittest.TestCase):
                 patch.object(sys, "stdout", io.StringIO()):
             made, packs = build()
             self.assertEqual(made, names)
+            # Every pack reads the installer and the licence step's files; a kind's own helper only its.
+            common = PACK_FILES - {"install_shannon.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go"}
             self.assertEqual({name: set(pack["inputs"]["files"]) for name, pack in packs.items()},
-                             {"gemini": {"installer.py"}, "shannon": {"installer.py", "install_shannon.py"},
-                              "pentagi": {"installer.py", "install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go"}})
+                             {"gemini": common, "shannon": common | {"install_shannon.py"},
+                              "pentagi": common | {"install_pentagi.py", "pentagi_vm.go", "pentagi_vm_test.go"}})
             self.assertEqual(build()[0], [])
             for changed, rebuilt in (("pentagi_vm.go", ["pentagi"]), ("pentagi_vm_test.go", ["pentagi"]), ("install_pentagi.py", ["pentagi"]),
                                      ("install_shannon.py", ["shannon"]), ("installer.py", names)):

@@ -172,7 +172,7 @@ pub(super) fn answer_text(value: &serde_json::Value) -> Option<String> {
 fn header(app: &App, width: usize, now: Instant) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let masker = &app.masker;
-    let mut lines = banner(theme, &masker.mask(&app.name), &app.version, &masker.mask(&app.model), width);
+    let mut lines = banner(theme, &masker.mask(&app.name), &app.version, &masker.mask(&crate::spec::shown_model(&app.model)), width);
     // What follows the banner, after one blank line.
     let mut details: Vec<Line<'static>> = Vec::new();
     let indent = vec![pad(2)];
@@ -184,7 +184,7 @@ fn header(app: &App, width: usize, now: Instant) -> Vec<Line<'static>> {
         ],
         Phase::Switching { model, since, step } => vec![
             spin(app, now),
-            span(format!(" Switching to {model}: {}…", step.to_lowercase()), Style::default()),
+            span(format!(" Switching to {}: {}…", crate::spec::shown_model(model), step.to_lowercase()), Style::default()),
             span(format!("  {}", clock(now.saturating_duration_since(*since))), theme.muted()),
         ],
         Phase::Changing { name, since, step } => vec![
@@ -308,7 +308,7 @@ fn status(app: &App, width: usize, now: Instant) -> Line<'static> {
         }
     }
     let name = span(app.masker.mask(&app.name).into_owned(), theme.bold());
-    let model_full = app.masker.mask(&app.model).into_owned();
+    let model_full = app.masker.mask(&crate::spec::shown_model(&app.model)).into_owned();
     let context = app
         .context_share()
         .map(|share| span(format!("{}% context", (share * 100.0).round() as u64), theme.level(share)));
